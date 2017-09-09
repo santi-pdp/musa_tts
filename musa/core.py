@@ -48,7 +48,12 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
                         break
         model.save(save_path, model_savename, epoch,
                    best_val=best_model)
-
+        print('Saving training loss')
+        np.save(os.path.join(save_path, 'tr_loss'), tr_loss)
+        if eval_target:
+            for k, v in val_scores:
+                print('Saving val score ', k)
+                np.save(os.path.join(save_path, k), v)
 
 def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
                     criterion=None, cuda=False, tr_opts={}):
