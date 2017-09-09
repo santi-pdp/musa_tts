@@ -18,6 +18,7 @@ def main(opts):
                           opts.lab_dir, opts.codebooks_dir,
                           force_gen=opts.force_gen,
                           norm_dur=True,
+                          max_spk_samples=opts.dur_max_samples,
                           parse_workers=opts.parser_workers)
         spk2durstats = dset.spk2durstats
         print('Spk2durstats: ', json.dumps(spk2durstats, indent=2))
@@ -29,6 +30,7 @@ def main(opts):
                               opts.lab_dir, opts.codebooks_dir,
                               force_gen=opts.force_gen,
                               norm_dur=True,
+                              max_spk_samples=opts.dur_max_samples,
                               parse_workers=opts.parser_workers)
         val_dloader = DataLoader(val_dset, batch_size=opts.batch_size,
                                  shuffle=False,
@@ -39,6 +41,7 @@ def main(opts):
                                     emb_size=opts.dur_emb_size,
                                     rnn_size=opts.dur_rnn_size,
                                     rnn_layers=opts.dur_rnn_layers,
+                                    sigmoid_out=opts.sigmoid_dur,
                                     dropout=opts.dur_dout,
                                     speakers=list(dset.spk2idx.keys()))
         adam = optim.Adam(dur_model.parameters(), lr=0.001)
@@ -48,33 +51,26 @@ def main(opts):
         print('Built duration model')
         print(dur_model)
         print('*' * 30)
-        tr_loss = []
-        va_loss = []
-        min_va_loss = 10e10
         patience = opts.patience
-        for epoch in range(opts.epoch):
-            best_model = False
-            tr_loss += train_dur_epoch(dur_model, dloader, adam, opts.log_freq, epoch,
-                                       cuda=opts.cuda)
-            val_rmse = eval_dur_epoch(dur_model, val_dloader, 
-                                      epoch, cuda=opts.cuda,
-                                      spk2durstats=spk2durstats)
-            if val_rmse < min_va_loss:
-                print('Val loss improved {:.3f} -> {:.3f}'
-                      ''.format(min_va_loss, val_rmse))
-                min_va_loss = val_rmse
-                best_model = True
-                patience = opts.patience
-            else:
-                patience -= 1
-                print('Val loss did not improve. Curr '
-                      'patience: {}/{}'.format(patience,
-                                               opts.patience))
-                if patience == 0:
-                    print('Out of patience. Ending DUR training.')
-                    break
-            dur_model.save(opts.save_path, 'dur_model.ckpt', epoch,
-                          best_val=best_model)
+        if opts.dur_loss == 'mse':
+            criterion = F.mse_loss
+        elif opts.dur_loss == 'mase':
+            criterion = F.l1_loss
+        elif opts.dur_loss == 'bce':
+            criterion = F.binary_cross_entropy
+        else:
+            raise ValueError('Dur loss not recognized: '
+                             '{}'.format(opts.dur_loss))
+        train_engine(dur_model, dloader, adam, opts.log_freq, train_dur_epoch,
+                     criterion,
+                     opts.epoch, opts.save_path, 'dur_model.ckpt',
+                     eval_fn=eval_dur_epoch, val_dloader=val_dloader,
+                     eval_stats=spk2durstats,
+                     eval_target='total_nosil_dur_rmse',
+                     eval_patience=opts.patience,
+                     cuda=opts.cuda,
+                     va_opts={'loss':'bce'})
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -89,9 +85,14 @@ if __name__ == '__main__':
                         default=False,
                         help='Flag to specify that we train '
                              'a dur model.')
+    parser.add_argument('--dur_max_samples', type=int, default=None,
+                        help='Max samples per speaker in dur loader')
     parser.add_argument('--dur_rnn_size', type=int, default=256)
     parser.add_argument('--dur_rnn_layers', type=int, default=2)
     parser.add_argument('--dur_emb_size', type=int, default=256)
+    parser.add_argument('--dur_loss', type=str, default='mse',
+                        help='Options: mse | mae | bce')
+    parser.add_argument('--sigmoid_dur', action='store_true', default=False)
     parser.add_argument('--dur_dout', type=float, default=0.5)
     parser.add_argument('--batch_size', type=int, default=50)
     parser.add_argument('--epoch', type=int, default=50)

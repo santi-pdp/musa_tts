@@ -75,6 +75,8 @@ def varlen_dur_collate(batch):
         compose the batch of sequences (lab, dur) 
         by padding to the longest one found
     """
+    ph_batch = [b[1] for b in batch]
+    batch = [b[0] for b in batch]
     # traverse the batch looking for the longest seq 
     max_seq_len = 0
     for seq in batch:
@@ -106,7 +108,7 @@ def varlen_dur_collate(batch):
     labs = torch.from_numpy(labs)
     durs = torch.from_numpy(durs)
     seqlens = torch.from_numpy(seqlens)
-    return spks, labs, durs, seqlens
+    return spks, labs, durs, seqlens, ph_batch
 
 
 
@@ -114,7 +116,8 @@ class TCSTAR(Dataset):
 
     def __init__(self, spk_cfg_file, split, lab_dir,
                  lab_codebooks_path, force_gen=False,
-                 ogmios_lab=True, parse_workers=4):
+                 ogmios_lab=True, parse_workers=4,
+                 max_spk_samples=None):
         with open(spk_cfg_file, 'rb') as cfg_f:
             # load speakers config paths
             self.speakers = pickle.load(cfg_f)
@@ -140,6 +143,7 @@ class TCSTAR(Dataset):
         self.force_gen = force_gen
         self.parse_workers = parse_workers
         self.lab_codebooks_path = lab_codebooks_path
+        self.max_spk_samples = max_spk_samples
         self.load_lab()
         # save stats in case anything changed
         with open(spk_cfg_file, 'wb') as cfg_f:
@@ -156,12 +160,14 @@ class TCSTAR_dur(TCSTAR):
 
     def __init__(self, spk_cfg_file, split, lab_dir,
                  lab_codebooks_path, force_gen=False,
-                 ogmios_lab=True, parse_workers=4, norm_dur=True):
+                 ogmios_lab=True, parse_workers=4, max_spk_samples=None, 
+                 norm_dur=True):
         self.norm_dur = norm_dur
         super(TCSTAR_dur, self).__init__(spk_cfg_file, split, lab_dir,
                                          lab_codebooks_path, force_gen=force_gen,
                                          ogmios_lab=ogmios_lab,
-                                         parse_workers=parse_workers)
+                                         parse_workers=parse_workers,
+                                         max_spk_samples=max_spk_samples)
 
     def tstamps_to_dur(self, tstamps):
         # convert the list of lists of tstamps [[beg_1, end_1], ...] to durs
@@ -202,6 +208,8 @@ class TCSTAR_dur(TCSTAR):
         beg_t = timeit.default_timer()
         num_labs_total = sum(len(spk[self.split]) for sname, spk in
                                  self.speakers.items())
+        if self.max_spk_samples is not None:
+            num_labs_total = self.max_spk_samples * len(self.speakers)
         print('TCSTAR_dur-{} > Parsing {} labs from {} speakers. '
               'Num workers: {}...'.format(self.split, 
                                           num_labs_total,
@@ -209,7 +217,11 @@ class TCSTAR_dur(TCSTAR):
                                           self.parse_workers))
         for sname, spk in self.speakers.items():
             async_f = read_speaker_labs
-            async_args = (sname, spk[self.split], self.lab_dir,
+            if self.max_spk_samples is not None:
+                spk_samples = spk[self.split][:self.max_spk_samples]
+            else:
+                spk_samples = spk[self.split]
+            async_args = (sname, spk_samples, self.lab_dir,
                           lab_parser)
             spk['result'] = parse_pool.apply_async(async_f, async_args)
         parse_pool.close()
@@ -248,6 +260,8 @@ class TCSTAR_dur(TCSTAR):
         # Encode all lab contents
         # store vectorized sequences of samples of triplets (spk, lab, dur)
         self.vec_sample = []
+        # store reference to phone identities (str)
+        self.phone_sample = []
         print('TCSTAR_dur-{} > Vectorizing {} sequences..'
               '.'.format(self.split,
                          len(total_parsed_durs)))
@@ -255,8 +269,11 @@ class TCSTAR_dur(TCSTAR):
         for spk, dur_seq, lab_seq in zip(total_parsed_spks, total_parsed_durs, 
                                          total_parsed_labs):
             vec_seq = [None] * len(dur_seq)
+            phone_seq = [None] * len(dur_seq)
             for t_, (dur, lab) in enumerate(zip(dur_seq, lab_seq)):
                 code = lab_enc(lab, normalize='minmax', sort_types=False)
+                # store reference to phoneme labels (to filter if needed)
+                phone_seq[t_] = lab[:5]
                 if self.norm_dur:
                     dur_stats = self.speakers[spk]['dur_stats']
                     #print('dur_stats: ', dur_stats)
@@ -272,14 +289,15 @@ class TCSTAR_dur(TCSTAR):
                 if not hasattr(self, 'ling_feats_dim'):
                     self.ling_feats_dim = len(code)
             self.vec_sample.append(vec_seq)
+            self.phone_sample.append(phone_seq)
         end_t = timeit.default_timer()
         print('TCSTAR_dur-{} > Vectorized dur samples in {:.4f} '
               's'.format(self.split, end_t - beg_t))
         # All labs + durs are vectorized and stored at this point
 
     def __getitem__(self, index):
-        # return triplet (spk_idx, code, ndur)
-        return self.vec_sample[index]
+        # return seq of triplets (spk_idx, code, ndur) and seq of (ph_id_str)
+        return self.vec_sample[index], self.phone_sample[index]
 
     def __len__(self):
         return len(self.vec_sample)

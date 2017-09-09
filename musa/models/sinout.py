@@ -1,6 +1,7 @@
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
+import torch.nn.functional as F
 from .core import speaker_model
 
 
@@ -79,7 +80,7 @@ class sinout_duration(speaker_model):
     """ Baseline single output duration model """
 
     def __init__(self, num_inputs, emb_size, rnn_size, rnn_layers,
-                 dropout, speakers=None):
+                 dropout, sigmoid_out=False, speakers=None):
         super(sinout_duration, self).__init__()
         """
         # Arguments
@@ -93,6 +94,7 @@ class sinout_duration(speaker_model):
         self.rnn_layers = rnn_layers
         self.num_outputs = 1
         self.dropout = dropout
+        self.sigmoid_out = sigmoid_out
         self.num_inputs = num_inputs
         # -- Embedding layers (merge of input features)
         self.input_fc = nn.Linear(num_inputs, self.emb_size)
@@ -146,6 +148,8 @@ class sinout_duration(speaker_model):
                    self.emb_size)
         x, rnn_state = self.core_rnn(x, rnn_state)
         y = self.out_fc(x.view(-1, self.rnn_size))
+        if self.sigmoid_out:
+            y = F.sigmoid(y)
         y = y.view(ling_features.size(0), -1, 1)
         return y, rnn_state
 
