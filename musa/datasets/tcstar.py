@@ -86,9 +86,12 @@ def varlen_dur_collate(batch):
     # build the batches of spk_idx, labs and durs
     # each sample in batch is a sequence!
     spks = np.zeros((len(batch), max_seq_len), dtype=np.int64)
-    if isinstance(batch[0][0][2], np.int64):
+    #print('np array dtype: ', batch[0][0][2].dtype)
+    if batch[0][0][2].dtype == np.int64:
+    #    print('int64')
         durs = np.zeros((len(batch), max_seq_len), dtype=np.int64)
     else:
+    #    print('float32')
         durs = np.zeros((len(batch), max_seq_len), dtype=np.float32)
     lab_len = len(batch[0][0][1])
     labs = np.zeros((len(batch), max_seq_len, lab_len), dtype=np.float32)
