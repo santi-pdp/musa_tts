@@ -10,6 +10,7 @@ from .utils import *
 import timeit
 import numpy as np
 import multiprocessing as mp
+from sklearn.cluster import KMeans
 
 
 def read_speaker_labs(spk_name, ids_list, lab_dir, lab_parser):
@@ -85,7 +86,10 @@ def varlen_dur_collate(batch):
     # build the batches of spk_idx, labs and durs
     # each sample in batch is a sequence!
     spks = np.zeros((len(batch), max_seq_len), dtype=np.int64)
-    durs = np.zeros((len(batch), max_seq_len), dtype=np.float32)
+    if isinstance(batch[0][0][2], np.int64):
+        durs = np.zeros((len(batch), max_seq_len), dtype=np.int64)
+    else:
+        durs = np.zeros((len(batch), max_seq_len), dtype=np.float32)
     lab_len = len(batch[0][0][1])
     labs = np.zeros((len(batch), max_seq_len, lab_len), dtype=np.float32)
     # store each sequence length
@@ -117,7 +121,21 @@ class TCSTAR(Dataset):
     def __init__(self, spk_cfg_file, split, lab_dir,
                  lab_codebooks_path, force_gen=False,
                  ogmios_lab=True, parse_workers=4,
+                 max_seq_len=None, batch_size=None,
                  max_spk_samples=None):
+        """
+        # Arguments:
+            max_seq_len: if specified, batches are stateful-like
+                         with max_seq_len time-steps per sample,
+                         and batch_size is also required.
+        """
+        if max_seq_len is not None:
+            if batch_size is None:
+                raise ValueError('Please specify a batch size in '
+                                 ' TCSTAR to arrange the stateful '
+                                 ' sequences.')
+        self.max_seq_len = max_seq_len
+        self.batch_size = batch_size
         with open(spk_cfg_file, 'rb') as cfg_f:
             # load speakers config paths
             self.speakers = pickle.load(cfg_f)
@@ -160,13 +178,27 @@ class TCSTAR_dur(TCSTAR):
 
     def __init__(self, spk_cfg_file, split, lab_dir,
                  lab_codebooks_path, force_gen=False,
-                 ogmios_lab=True, parse_workers=4, max_spk_samples=None, 
+                 ogmios_lab=True, parse_workers=4, 
+                 max_seq_len=None, batch_size=None,
+                 max_spk_samples=None, 
+                 q_classes=None,
                  norm_dur=True):
+        """
+        # Arguments
+            q_classes: integer specifying num of quantization clusters.
+                       This means output will be given as integer, and the
+                       clustering process is embedded in the data reading.
+        """
+        if q_classes is not None:
+            assert isinstance(q_classes, int), type(q_classes)
+        self.q_classes = q_classes
         self.norm_dur = norm_dur
         super(TCSTAR_dur, self).__init__(spk_cfg_file, split, lab_dir,
                                          lab_codebooks_path, force_gen=force_gen,
                                          ogmios_lab=ogmios_lab,
                                          parse_workers=parse_workers,
+                                         max_seq_len=max_seq_len,
+                                         batch_size=batch_size,
                                          max_spk_samples=max_spk_samples)
 
     def tstamps_to_dur(self, tstamps):
@@ -233,9 +265,10 @@ class TCSTAR_dur(TCSTAR):
             if self.norm_dur:
                 if self.split == 'train' and ('dur_stats' not in spk or \
                                               self.force_gen):
+                    flat_durs = [fd for dseq in parsed_durs for fd in dseq]
                     # if they do not exist (or force_gen) and it's train split
-                    dur_min = np.min(parsed_durs)
-                    dur_max = np.max(parsed_durs)
+                    dur_min = np.min(flat_durs)
+                    dur_max = np.max(flat_durs)
                     spk['dur_stats'] = {'min':dur_min,
                                         'max':dur_max}
                 elif self.split != 'train' and 'dur_stats' not in spk:
@@ -243,6 +276,19 @@ class TCSTAR_dur(TCSTAR):
                                      'and norm_dur option was specified. Load '
                                      'train split to solve this issue, or '
                                      'pre-compute the stats.')
+            if self.q_classes is not None:
+                if self.split == 'train' and ('dur_clusters' not in spk or \
+                                              self.force_gen) and \
+                   self.q_classes is not None:
+                    flat_durs = [fd for dseq in parsed_durs for fd in dseq]
+                    flat_durs = np.array(flat_durs)
+                    flat_durs = flat_durs.reshape((-1, 1))
+                    # make quantization for every user training data samples
+                    dur_kmeans = KMeans(n_clusters=self.q_classes,
+                                        random_state=0).fit(flat_durs)
+                    self.dur_kmeans = dur_kmeans
+                    # Normalization of dur is not necessary anymore with clusters
+                    spk['dur_clusters'] = dur_kmeans
             parsed_labs = result[2]
             total_flat_labs += result[3]
             total_parsed_durs += parsed_durs
@@ -265,35 +311,125 @@ class TCSTAR_dur(TCSTAR):
         print('TCSTAR_dur-{} > Vectorizing {} sequences..'
               '.'.format(self.split,
                          len(total_parsed_durs)))
+        all_durs = {} # tmp
         beg_t = timeit.default_timer()
-        for spk, dur_seq, lab_seq in zip(total_parsed_spks, total_parsed_durs, 
-                                         total_parsed_labs):
-            vec_seq = [None] * len(dur_seq)
-            phone_seq = [None] * len(dur_seq)
-            for t_, (dur, lab) in enumerate(zip(dur_seq, lab_seq)):
-                code = lab_enc(lab, normalize='minmax', sort_types=False)
-                # store reference to phoneme labels (to filter if needed)
-                phone_seq[t_] = lab[:5]
-                if self.norm_dur:
-                    dur_stats = self.speakers[spk]['dur_stats']
-                    #print('dur_stats: ', dur_stats)
-                    ndur = (dur - dur_stats['min']) / (dur_stats['max'] - \
-                                                       dur_stats['min'])
-                    # store ref to this speaker dur stats to denorm outside
-                    if not hasattr(self, 'spk2durstats'):
-                        self.spk2durstats = {}
-                    self.spk2durstats[self.spk2idx[spk]] = dur_stats
-                else:
-                    ndur = dur
-                vec_seq[t_] = [self.spk2idx[spk], code, ndur]
-                if not hasattr(self, 'ling_feats_dim'):
-                    self.ling_feats_dim = len(code)
-            self.vec_sample.append(vec_seq)
-            self.phone_sample.append(phone_seq)
+        if self.max_seq_len is None:
+            for spk, dur_seq, lab_seq in zip(total_parsed_spks, total_parsed_durs, 
+                                             total_parsed_labs):
+                vec_seq = [None] * len(dur_seq)
+                phone_seq = [None] * len(dur_seq)
+                for t_, (dur, lab) in enumerate(zip(dur_seq, lab_seq)):
+                    code = lab_enc(lab, normalize='minmax', sort_types=False)
+                    # store reference to phoneme labels (to filter if needed)
+                    phone_seq[t_] = lab[:5]
+                    ndur = self.process_dur(spk, dur)
+                    if spk not in all_durs:
+                        all_durs[spk] = []
+                    all_durs[spk].append(dur)
+                    vec_seq[t_] = [self.spk2idx[spk], code, ndur]
+                    if not hasattr(self, 'ling_feats_dim'):
+                        self.ling_feats_dim = len(code)
+                        print('setting ling feats dim: ', len(code))
+                self.vec_sample.append(vec_seq)
+                self.phone_sample.append(phone_seq)
+            pickle.dump(all_durs, open('/tmp/durs.pickle', 'wb'))
+        else:
+            print('-' * 50)
+            print('Encoding dur samples with max_seq_len {} and batch_size '
+                  '{}'.format(self.max_seq_len, self.batch_size))
+            # First, arrange all sequences into one very long one
+            # Then split it into batch_size sequences, and arrange
+            # samples to follow batch_size interleaved samples (stateful)
+            all_code_seq = []
+            all_phone_seq = []
+            for spk, dur_seq, lab_seq in zip(total_parsed_spks,
+                                             total_parsed_durs,
+                                             total_parsed_labs):
+                for t_, (dur, lab) in enumerate(zip(dur_seq, lab_seq)):
+                    code = lab_enc(lab, normalize='minmax', sort_types=False)
+                    ndur = self.process_dur(spk, dur)
+                    all_code_seq.append([self.spk2idx[spk]] + code + [ndur])
+                    all_phone_seq.append(lab[:5])
+                    if not hasattr(self, 'ling_feats_dim'):
+                        self.ling_feats_dim = len(code)
+                        print('setting ling feats dim: ', len(code))
+            # all_code_seq contains the large sequence of features (in, out)
+            all_seq_len = len(all_code_seq)
+            print('Lengt of all code_seq: ', all_seq_len)
+            total_batches = (all_seq_len // (self.batch_size * \
+                                             self.max_seq_len)) + 1
+            print('total stateful batches: ', total_batches)
+            # pad large sequences to operate with numpy arrays
+            pad_len = total_batches * (self.batch_size * self.max_seq_len) - \
+                      all_seq_len
+            print('pad_len: ', pad_len)
+            all_code_seq += [[0.] + [0.] * self.ling_feats_dim + [0]] * \
+                            pad_len
+            all_phone_seq += [['<PAD>'] * 5] * pad_len
+            co_arr = np.array(all_code_seq)
+            ph_arr = np.char.array(all_phone_seq)
+            print('co_arr shape: ', co_arr.shape)
+            print('ph_arr shape: ', ph_arr.shape)
+            # interleave numpy samples
+            co_arr = co_arr.reshape((self.batch_size, -1, co_arr.shape[-1]))
+            ph_arr = ph_arr.reshape((self.batch_size, -1, ph_arr.shape[-1]))
+            print('co_arr reshaped shape: ', co_arr.shape)
+            print('ph_arr reshaped shape: ', ph_arr.shape)
+            co_arr = np.split(co_arr, co_arr.shape[1] // self.max_seq_len, axis=1)
+            ph_arr = np.split(ph_arr, ph_arr.shape[1] // self.max_seq_len, axis=1)
+            print('Interleaved co_arr[0] shape: ', co_arr[0].shape)
+            co_arr = np.concatenate(co_arr, axis=0)
+            ph_arr = np.concatenate(ph_arr, axis=0)
+            print('Interleaved co_arr: ', co_arr.shape)
+            print('Interleaved ph_arr: ', ph_arr.shape)
+            # make phone array a list again
+            self.phone_sample = ph_arr.tolist() 
+            # format data excluding padding symbols now
+            for phone_sample, vec_sample in zip(ph_arr, co_arr):
+                vec_seq = []
+                ph_seq = []
+                if phone_sample[0][0] == '<PAD>':
+                    # This sample is just a remaining of padding
+                    # do not include in samples
+                    break
+                for t_ in range(vec_sample.shape[0]):
+                    vec_seq_el = vec_sample[t_]
+                    ph_seq_el = phone_sample[t_]
+                    if ph_seq_el[0] == '<PAD>':
+                        print('Breaking list format loop at t_ {}'.format(t_))
+                        break
+                    vec_seq.append([vec_seq_el[0], vec_seq_el[1:-1], 
+                                    vec_seq_el[-1]])
+                    ph_seq.append(ph_seq_el.tolist())
+                self.vec_sample.append(vec_seq)
+                self.phone_sample.append(ph_seq)
+            print('-' * 50)
         end_t = timeit.default_timer()
         print('TCSTAR_dur-{} > Vectorized dur samples in {:.4f} '
               's'.format(self.split, end_t - beg_t))
         # All labs + durs are vectorized and stored at this point
+
+    def process_dur(self, spk, dur):
+        if not hasattr(self, 'spk2durstats'):
+            self.spk2durstats = {}
+        if self.norm_dur and not self.q_classes:
+            dur_stats = self.speakers[spk]['dur_stats']
+            #print('dur_stats: ', dur_stats)
+            ndur = (dur - dur_stats['min']) / (dur_stats['max'] - \
+                                               dur_stats['min'])
+            if self.spk2idx[spk] not in self.spk2durstats:
+                # store ref to this speaker dur stats to denorm outside
+                self.spk2durstats[self.spk2idx[spk]] = dur_stats
+        elif self.q_classes is not None:
+            spk_clusters = self.speakers[spk]['dur_clusters']
+            # TODO: can do batch prediction, but nvm atm
+            ndur = spk_clusters.predict([[dur]])[0]
+            ndur = np.array(ndur, dtype=np.int64)
+            if self.spk2idx[spk] not in self.spk2durstats:
+                self.spk2durstats[self.spk2idx[spk]] = spk_clusters
+        else:
+            ndur = dur
+        return ndur
 
     def __getitem__(self, index):
         # return seq of triplets (spk_idx, code, ndur) and seq of (ph_id_str)
@@ -313,7 +449,9 @@ class TCSTAR_aco(TCSTAR):
         super(TCSTAR_aco, self).__init__(spk_cfg_file, split, lab_dir,
                                          lab_codebooks_path, force_gen,
                                          ogmios_lab=ogmios_lab,
-                                         parse_workers=parse_workers)
+                                         parse_workers=parse_workers,
+                                         max_seq_len=max_seq_len,
+                                         batch_size=batch_size)
         self.aco_window_stride = aco_window_stride
         self.aco_window_len = aco_window_len
         self.aco_frame_rate = aco_frame_rate
