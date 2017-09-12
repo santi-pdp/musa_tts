@@ -94,7 +94,7 @@ def main(opts):
                      eval_target='total_nosil_dur_rmse',
                      eval_patience=opts.patience,
                      cuda=opts.cuda,
-                     va_opts={'loss':'bce'})
+                     va_opts={'q_classes':True})
 
 
 if __name__ == '__main__':
