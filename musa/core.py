@@ -3,6 +3,7 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from .utils import *
 import numpy as np
+import os
 
 
 def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
@@ -10,14 +11,14 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
                  val_dloader=None, eval_stats=None, eval_target=None, 
                  eval_patience=None, cuda=False, va_opts={}):
     tr_loss = []
-    va_loss = []
+    va_loss = {}
     min_va_loss = np.inf
     patience=eval_patience
     for epoch in range(epochs):
         best_model = False
         tr_loss += train_fn(model, dloader, opt, log_freq, epoch,
                             criterion=train_criterion,
-                            cuda=cuda, tr_opts=tr_opts)
+                            cuda=cuda, tr_opts=tr_opts.copy())
         if eval_fn:
             if val_dloader is None:
                 raise ValueError('Train engine: please specify '
@@ -25,12 +26,17 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
             val_scores = eval_fn(model, val_dloader, 
                                  epoch, cuda=cuda,
                                  stats=eval_stats,
-                                 va_opts=va_opts)
+                                 va_opts=va_opts.copy())
             if eval_target:
                 if eval_patience is None:
                     raise ValueError('Train engine: Need a patience '
                                      'factor to be specified '
                                      'whem eval_target is given')
+                for k, v in val_scores.items():
+                    if k not in va_loss:
+                        va_loss[k] = [v]
+                    else:
+                        va_loss[k].append(v)
                 # we have a target key to do early stopping upon it
                 if val_scores[eval_target] < min_va_loss:
                     print('Val loss improved {:.3f} -> {:.3f}'
@@ -51,13 +57,19 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
         print('Saving training loss')
         np.save(os.path.join(save_path, 'tr_loss'), tr_loss)
         if eval_target:
-            for k, v in val_scores:
+            for k, v in va_loss.items():
                 print('Saving val score ', k)
                 np.save(os.path.join(save_path, k), v)
 
 def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
                     criterion=None, cuda=False, tr_opts={}):
     model.train()
+    stateful = False
+    if 'stateful' in tr_opts:
+        stateful = True
+        tr_opts.pop('stateful')
+    assert len(tr_opts) == 0, 'unrecognized params passed in: '\
+                              '{}'.format(kwargs.keys())
     epoch_losses = []
     num_batches = len(dloader)
     for b_idx, batch in enumerate(dloader):
@@ -70,8 +82,16 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
         slen_b = Variable(slen_b)
         # get curr batch size
         curr_bsz = spk_b.size(1)
-        # init hidden states of dur model
-        states = model.init_hidden_state(curr_bsz)
+        if (stateful and b_idx == 0) or not stateful:
+            #print('Initializing recurrent states, e: {}, b: '
+            #      '{}'.format(epoch_idx, b_idx))
+            # init hidden states of dur model
+            states = model.init_hidden_state(curr_bsz)
+        if stateful and b_idx > 0:
+            #print('Copying recurrent states, e: {}, b: '
+            #      '{}'.format(epoch_idx, b_idx))
+            # copy last states
+            states = repackage_hidden(states, curr_bsz)
         if cuda:
             spk_b = var_to_cuda(spk_b)
             lab_b = var_to_cuda(lab_b)
@@ -83,6 +103,11 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
         #print('y size: ', y.size())
         #print('states[0] size: ', states[0].size())
         # compute loss
+        if criterion == F.nll_loss:
+            y = y.view(-1, y.size(-1))
+            dur_b = dur_b.view(-1)
+        #print('y size: ', y.size())
+        #print('dur_b: ', dur_b.size())
         loss = criterion(y.squeeze(-1), dur_b,
                          size_average=True)
         #print('batch {:4d}: loss: {:.5f}'.format(b_idx + 1, loss.data[0]))
@@ -101,15 +126,19 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
 def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
                    stats=None, va_opts={'sil_id':'pau'}):
     model.eval()
+    sil_id = 'pau'
+    q_classes = False
     if 'sil_id' in va_opts:
         sil_id = va_opts.pop('sil_id')
-    else:
-        sil_id = 'pau'
+    if 'q_classes' in va_opts:
+        q_classes = True
     spk2durstats=stats
     preds = None
     gtruths = None
     seqlens = None
     spks = None
+    # make the silence mask
+    sil_mask = None
     for b_idx, batch in enumerate(dloader):
         # decompose the batch into the sub-batches
         spk_b, lab_b, dur_b, slen_b, ph_b = batch
@@ -138,8 +167,6 @@ def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
         dur_npy = dur_b.cpu().data.transpose(0,1).numpy()
         slens_npy = slen_b.cpu().data.numpy()
         spk_npy = spk_b.cpu().data.transpose(0,1).numpy()
-        # make the silence mask
-        sil_mask = None
         # first, select sequences within permitted lengths (remove pad)
         for ii, (y_i, dur_i, spk_i, slen_i) in enumerate(zip(y_npy, 
                                                              dur_npy, 
@@ -157,32 +184,72 @@ def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
                     curr_ph_seq_mask[t_] = 0.
             if preds is None:
                 #print('Trimming seqlen {}/{}'.format(slen_i, y_i.shape[0]))
-                preds = y_i[:slen_i]
-                gtruths = dur_i[:slen_i]
+                if q_classes is not None:
+                    max_y_i = []
+                    # have to argmax directly y_i seq
+                    for y_i_t in y_i:
+                        max_y_i.append(np.argmax(y_i_t))
+                    preds = np.array(max_y_i[:slen_i], dtype=np.float32)
+                else:
+                    # just single output y_i_t
+                    preds = np.array(y_i[:slen_i], dtype=np.float32)
+                gtruths = np.array(dur_i[:slen_i], dtype=np.float32)
                 spks = spk_i[:slen_i]
                 sil_mask = curr_ph_seq_mask
             else:
                 #print('Trimming seqlen {}/{}'.format(slen_i, y_i.shape[0]))
-                preds = np.concatenate((preds, y_i[:slen_i]))
-                gtruths = np.concatenate((gtruths, dur_i[:slen_i]))
+                if q_classes is not None:
+                    max_y_i = []
+                    # have to argmax directly y_i seq
+                    for y_i_t in y_i:
+                        max_y_i.append(np.argmax(y_i_t))
+                    preds = np.concatenate((preds, np.array(max_y_i[:slen_i], 
+                                                            dtype=np.float32)))
+                else:
+                    preds = np.concatenate((preds, np.array(y_i[:slen_i],
+                                                            dtype=np.float32)))
+                gtruths = np.concatenate((gtruths, np.array(dur_i[:slen_i],
+                                                            dtype=np.float32)))
                 spks = np.concatenate((spks, spk_i[:slen_i]))
+                #print('concatenating sil_mask shape: ', sil_mask.shape)
+                #print('with curr_ph_seq_mask shape: ', curr_ph_seq_mask.shape)
                 sil_mask = np.concatenate((sil_mask, curr_ph_seq_mask))
     #print('After batch preds shape: ', preds.shape)
     #print('After batch gtruths shape: ', gtruths.shape)
     #print('After batch sil_mask shape: ', sil_mask.shape)
-    if spk2durstats is not None:
-        # denorm based on spk_id stats
-        for ii, (spk_i, dur_i, y_i) in enumerate(zip(spks, gtruths, 
-                                                     preds)):
-            dur_stats = spk2durstats[spk_i]
+    # denorm with normalization stats
+    assert spk2durstats is not None
+    # denorm based on spk_id stats
+    for ii, (spk_i, dur_i, y_i) in enumerate(zip(spks, gtruths, 
+                                                 preds)):
+        dur_stats = spk2durstats[spk_i]
+        if q_classes is not None:
+            kmeans = dur_stats#['dur_clusters']
+            # map gtruths idxes to centroid values
+            ccs = kmeans.cluster_centers_
+            dur_cc = ccs[dur_i][0]
+            #print('Groundtruth cc {} from dur {}'.format(dur_cc,
+            #                                             dur_i))
+            gtruths[ii] = dur_cc
+            # get max of predictions
+            #print('Argmax pred: ', y_i)
+            pred_cc = ccs[y_i]
+            #print('Prediction cc {} from dur {}'.format(pred_cc,
+            #                                            y_i))
+            preds[ii] = pred_cc
+            #print('gtruth: {} s'.format(gtruths[ii]))
+            #print('pred: {} s'.format(preds[ii]))
+        else:
             dur_min = dur_stats['min']
             dur_max = dur_stats['max']
             preds[ii] = denorm_minmax(y_i, dur_min, dur_max)
             gtruths[ii] = denorm_minmax(dur_i, dur_min, dur_max)
-            #print('Denorming spk {} min: {}, max: {}'.format(spk_i, dur_min,
-            #                                                 dur_max))
-            #print('denorm {}-pred: {} s'.format(ii, preds[ii]))
-            #print('denorm {}-gtruths: {} s'.format(ii, gtruths[ii]))
+        #print('Denorming spk {} min: {}, max: {}'.format(spk_i, dur_min,
+        #                                                 dur_max))
+        #print('denorm {}-pred: {} s'.format(ii, preds[ii]))
+        #print('denorm {}-gtruths: {} s'.format(ii, gtruths[ii]))
+        # decode with kmeans object
+        kmeans = spk2durstats[spk_i]
     dur_rmse = rmse(preds, gtruths) * 1e3
     nosil_dur_rmse = rmse(preds * sil_mask, gtruths * sil_mask) * 1e3
     print('Evaluated dur mRMSE [ms]: {:.3f}'.format(dur_rmse))

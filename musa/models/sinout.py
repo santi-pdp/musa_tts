@@ -79,7 +79,7 @@ class sinout_acoustic(speaker_model):
 class sinout_duration(speaker_model):
     """ Baseline single output duration model """
 
-    def __init__(self, num_inputs, emb_size, rnn_size, rnn_layers,
+    def __init__(self, num_inputs, num_outputs, emb_size, rnn_size, rnn_layers,
                  dropout, sigmoid_out=False, speakers=None):
         super(sinout_duration, self).__init__()
         """
@@ -92,17 +92,18 @@ class sinout_duration(speaker_model):
         self.emb_size = emb_size
         self.rnn_size = rnn_size
         self.rnn_layers = rnn_layers
-        self.num_outputs = 1
+        self.num_outputs = num_outputs
         self.dropout = dropout
         self.sigmoid_out = sigmoid_out
         self.num_inputs = num_inputs
+        if speakers is None or len(speakers) <= 1:
+            self.speakers = None
+        else:
+            self.speakers = speakers
         # -- Embedding layers (merge of input features)
         self.input_fc = nn.Linear(num_inputs, self.emb_size)
-        if speakers is not None:
+        if self.speakers is not None:
             assert type(speakers) == list, type(speakers)
-            if len(speakers) <= 1:
-                raise ValueError('If you specify a speaker list, you need at '
-                                 'least > 2')
             # list of speaker names
             self.speakers = speakers
             self.emb = nn.Embedding(len(speakers), len(speakers))
@@ -124,6 +125,8 @@ class sinout_duration(speaker_model):
                                 dropout=self.dropout)
         # -- Build output mapping FC
         self.out_fc = nn.Linear(self.rnn_size, self.num_outputs)
+        if self.num_outputs > 1:
+            self.out_g = nn.LogSoftmax()
         
 
     def forward(self, ling_features, rnn_state, speaker_idx=None):
@@ -135,6 +138,7 @@ class sinout_duration(speaker_model):
         """
         # inputs are time-major (Seqlen, Bsize, features)
         re_ling_features = ling_features.view(-1, ling_features.size(-1))
+        print('re_ling_features size: ', re_ling_features.size())
         # go through fully connected embedding layers
         in_h = self.input_fc(re_ling_features)
         in_h = in_h.view(ling_features.size(0), -1,
@@ -148,9 +152,11 @@ class sinout_duration(speaker_model):
                    self.emb_size)
         x, rnn_state = self.core_rnn(x, rnn_state)
         y = self.out_fc(x.view(-1, self.rnn_size))
-        if self.sigmoid_out:
+        if self.sigmoid_out and self.num_outputs == 1:
             y = F.sigmoid(y)
-        y = y.view(ling_features.size(0), -1, 1)
+        elif self.num_outputs > 1:
+            y = self.out_g(y)
+        y = y.view(ling_features.size(0), -1, self.num_outputs)
         return y, rnn_state
 
     def init_hidden_state(self, curr_bsz, volatile=False):
