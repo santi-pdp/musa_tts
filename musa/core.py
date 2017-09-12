@@ -223,7 +223,7 @@ def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
     for ii, (spk_i, dur_i, y_i) in enumerate(zip(spks, gtruths, 
                                                  preds)):
         dur_stats = spk2durstats[spk_i]
-        if q_classes is not None:
+        if not q_classes:
             kmeans = dur_stats#['dur_clusters']
             # map gtruths idxes to centroid values
             ccs = kmeans.cluster_centers_

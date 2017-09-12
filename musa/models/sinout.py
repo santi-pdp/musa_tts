@@ -138,7 +138,6 @@ class sinout_duration(speaker_model):
         """
         # inputs are time-major (Seqlen, Bsize, features)
         re_ling_features = ling_features.view(-1, ling_features.size(-1))
-        print('re_ling_features size: ', re_ling_features.size())
         # go through fully connected embedding layers
         in_h = self.input_fc(re_ling_features)
         in_h = in_h.view(ling_features.size(0), -1,
