@@ -69,7 +69,7 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
         stateful = True
         tr_opts.pop('stateful')
     assert len(tr_opts) == 0, 'unrecognized params passed in: '\
-                              '{}'.format(kwargs.keys())
+                              '{}'.format(tr_opts.keys())
     epoch_losses = []
     num_batches = len(dloader)
     for b_idx, batch in enumerate(dloader):
@@ -124,14 +124,16 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
     return epoch_losses
 
 def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
-                   stats=None, va_opts={'sil_id':'pau'}):
+                   stats=None, va_opts={}):
     model.eval()
     sil_id = 'pau'
     q_classes = False
     if 'sil_id' in va_opts:
         sil_id = va_opts.pop('sil_id')
     if 'q_classes' in va_opts:
-        q_classes = True
+        q_classes= va_opts.pop('q_classes')
+    assert len(va_opts) == 0, 'unrecognized params passed in: '\
+                              '{}'.format(va_opts.keys())
     spk2durstats=stats
     preds = None
     gtruths = None
