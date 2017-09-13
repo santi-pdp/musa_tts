@@ -13,29 +13,62 @@ import multiprocessing as mp
 from sklearn.cluster import KMeans
 
 
-def read_speaker_labs(spk_name, ids_list, lab_dir, lab_parser):
+def read_speaker_labs(spk_name, ids_list, lab_dir, lab_parser,
+                      filter_by_dur=False):
     parsed_lines = [] # maintain seq structure
     parsed_tstamps = [] # maintain seq structure
     parse_timings = [] 
     flat_tstamps = []
     flat_lines = []
     beg_t = timeit.default_timer()
+    if filter_by_dur:
+        log_file = open('/tmp/dur_filter.log', 'w')
     for id_i, split_id in enumerate(ids_list, start=1):
         spk_lab_dir = os.path.join(lab_dir, spk_name)
         lab_f = os.path.join(spk_lab_dir, '{}.lab'.format(split_id))
         with open(lab_f) as lf:
             lab_lines = [l.rstrip() for l in lf.readlines()]
         tstamps, parsed_lab = lab_parser(lab_lines)
-        parsed_tstamps.append(tstamps)
-        parsed_lines.append(parsed_lab)
-        flat_lines += parsed_lab
-        flat_tstamps += tstamps
+        if filter_by_dur:
+            filtered_lab = []
+            filtered_tstamps = []
+            # compute durs from timestamps to keep VALID phonemes
+            converted_durs = tstamps_to_dur(tstamps, True)
+            assert len(converted_durs) == len(parsed_lab), \
+            len(converted_durs)
+            for (plab, dur, tss) in zip(parsed_lab, converted_durs,
+                                        tstamps):
+                #print('dur=', dur)
+                if dur > 0:
+                    #print('ACCEPTED with dur: ', dur)
+                    filtered_lab.append(plab)
+                    filtered_tstamps.append(tss)
+                else:
+                    #print('Filtered dur: ', dur)
+                    log_file.write('Filtred dur {} at file '
+                                   '{}.lab\n'.format(dur, 
+                                                 os.path.join(lab_dir,
+                                                              spk_name,
+                                                              split_id)))
+
+            flat_lines += filtered_lab
+            flat_tstamps += filtered_tstamps
+            parsed_tstamps.append(filtered_tstamps)
+            parsed_lines.append(filtered_lab)
+            a_durs = len(filtered_tstamps) / len(converted_durs)
+            #print('Ratio accepted durs: {}%'.format(a_durs * 100))
+        else:
+            parsed_tstamps.append(tstamps)
+            parsed_lines.append(parsed_lab)
+            flat_lines += parsed_lab
+            flat_tstamps += tstamps
         #parse_timings.append(timeit.default_timer() - beg_t)
         #print('Parsed spk-{} lab file {:5d}/{:5d}, mean time: {:.4f}'
         #      's'.format(spk_name, id_i, len(ids_list),
         #                 np.mean(parse_timings)),
         #     end='\n')
         #beg_t = timeit.default_timer()
+    log_file.close()
     return (spk_name, parsed_tstamps, parsed_lines, flat_lines)
 
 def read_speaker_aco(spk_name, ids_list, aco_dir):
@@ -86,9 +119,10 @@ def varlen_dur_collate(batch):
     # build the batches of spk_idx, labs and durs
     # each sample in batch is a sequence!
     spks = np.zeros((len(batch), max_seq_len), dtype=np.int64)
+    #print('batch[0][0][2] type: ', type(batch[0][0][2]))
     #print('np array dtype: ', batch[0][0][2].dtype)
     if batch[0][0][2].dtype == np.int64:
-    #    print('int64')
+        #print('int64')
         durs = np.zeros((len(batch), max_seq_len), dtype=np.int64)
     else:
     #    print('float32')
@@ -125,12 +159,16 @@ class TCSTAR(Dataset):
                  lab_codebooks_path, force_gen=False,
                  ogmios_lab=True, parse_workers=4,
                  max_seq_len=None, batch_size=None,
-                 max_spk_samples=None):
+                 max_spk_samples=None,
+                 mulout=False):
         """
         # Arguments:
             max_seq_len: if specified, batches are stateful-like
                          with max_seq_len time-steps per sample,
                          and batch_size is also required.
+
+            mulout: determines that speaker's data has to be
+                    arranged in batches
         """
         if max_seq_len is not None:
             if batch_size is None:
@@ -138,6 +176,7 @@ class TCSTAR(Dataset):
                                  ' TCSTAR to arrange the stateful '
                                  ' sequences.')
         self.max_seq_len = max_seq_len
+        self.mulout = mulout
         self.batch_size = batch_size
         with open(spk_cfg_file, 'rb') as cfg_f:
             # load speakers config paths
@@ -158,6 +197,7 @@ class TCSTAR(Dataset):
             for spk in self.speakers.keys():
                 self.spk2idx[spk] = self.speakers[spk]['idx']
             print('Loaded ids: ', json.dumps(self.spk2idx, indent=2))
+        self.idx2spk = dict((v, k) for k, v in self.spk2idx.items())
         self.split = split
         self.lab_dir = lab_dir
         self.ogmios_lab = ogmios_lab
@@ -184,6 +224,7 @@ class TCSTAR_dur(TCSTAR):
                  ogmios_lab=True, parse_workers=4, 
                  max_seq_len=None, batch_size=None,
                  max_spk_samples=None, 
+                 mulout=False,
                  q_classes=None,
                  norm_dur=True):
         """
@@ -201,20 +242,10 @@ class TCSTAR_dur(TCSTAR):
                                          ogmios_lab=ogmios_lab,
                                          parse_workers=parse_workers,
                                          max_seq_len=max_seq_len,
+                                         mulout=mulout,
                                          batch_size=batch_size,
                                          max_spk_samples=max_spk_samples)
 
-    def tstamps_to_dur(self, tstamps):
-        # convert the list of lists of tstamps [[beg_1, end_1], ...] to durs
-        # in seconds
-        durs = []
-        for seq in tstamps:
-            durs_t = []
-            for t_i, tss in enumerate(seq):
-                beg_t, end_t = map(float, tss)
-                durs_t.append((end_t - beg_t) / 1e7)
-            durs.append(durs_t)
-        return durs
 
     def load_lab(self):
         lab_codebooks_path = self.lab_codebooks_path
@@ -257,21 +288,24 @@ class TCSTAR_dur(TCSTAR):
             else:
                 spk_samples = spk[self.split]
             async_args = (sname, spk_samples, self.lab_dir,
-                          lab_parser)
+                          lab_parser, True)
             spk['result'] = parse_pool.apply_async(async_f, async_args)
         parse_pool.close()
         parse_pool.join()
         for sname, spk in self.speakers.items():
             result = spk['result'].get()
             parsed_timestamps = result[1]
-            parsed_durs = self.tstamps_to_dur(parsed_timestamps)
+            parsed_durs = tstamps_to_dur(parsed_timestamps)
             if self.norm_dur:
                 if self.split == 'train' and ('dur_stats' not in spk or \
                                               self.force_gen):
                     flat_durs = [fd for dseq in parsed_durs for fd in dseq]
                     # if they do not exist (or force_gen) and it's train split
                     dur_min = np.min(flat_durs)
+                    assert dur_min > 0, dur_min
                     dur_max = np.max(flat_durs)
+                    assert dur_max > 0, dur_max
+                    assert dur_max > dur_min, dur_max
                     spk['dur_stats'] = {'min':dur_min,
                                         'max':dur_max}
                 elif self.split != 'train' and 'dur_stats' not in spk:
@@ -298,7 +332,8 @@ class TCSTAR_dur(TCSTAR):
             total_parsed_labs += parsed_labs
             total_parsed_spks += [sname] * len(parsed_labs)
             del spk['result']
-        # Build label encoder (codebooks will be made if they don't exist)
+        # Build label encoder (codebooks will be made if they don't exist or
+        # if they are forced)
         lab_enc = label_encoder(codebooks_path=lab_codebooks_path,
                                 lab_data=total_flat_labs,
                                 force_gen=self.force_gen)
@@ -308,9 +343,15 @@ class TCSTAR_dur(TCSTAR):
               's'.format(self.split, end_t - beg_t))
         # Encode all lab contents
         # store vectorized sequences of samples of triplets (spk, lab, dur)
-        self.vec_sample = []
-        # store reference to phone identities (str)
-        self.phone_sample = []
+        if self.mulout:
+            # separated by spk idx
+            self.vec_sample = {}
+            self.phone_sample = {}
+        else:
+            # all merged together
+            self.vec_sample = []
+            # store reference to phone identities (str)
+            self.phone_sample = []
         print('TCSTAR_dur-{} > Vectorizing {} sequences..'
               '.'.format(self.split,
                          len(total_parsed_durs)))
@@ -333,8 +374,16 @@ class TCSTAR_dur(TCSTAR):
                     if not hasattr(self, 'ling_feats_dim'):
                         self.ling_feats_dim = len(code)
                         print('setting ling feats dim: ', len(code))
-                self.vec_sample.append(vec_seq)
-                self.phone_sample.append(phone_seq)
+                if self.mulout:
+                    spk_name = spk
+                    if spk_name not in self.vec_sample:
+                        self.vec_sample[spk_name] = []
+                        self.phone_sample[spk_name] = []
+                    self.vec_sample[spk_name].append(vec_seq)
+                    self.phone_sample[spk_name].append(phone_seq)
+                else:
+                    self.vec_sample.append(vec_seq)
+                    self.phone_sample.append(phone_seq)
             pickle.dump(all_durs, open('/tmp/durs.pickle', 'wb'))
         else:
             print('-' * 50)
@@ -401,11 +450,22 @@ class TCSTAR_dur(TCSTAR):
                     if ph_seq_el[0] == '<PAD>':
                         print('Breaking list format loop at t_ {}'.format(t_))
                         break
+                    dur_i_t = vec_seq_el[-1]
+                    if self.q_classes is not None:
+                        dur_i_t = np.array(dur_i_t, dtype=np.int64)
                     vec_seq.append([vec_seq_el[0], vec_seq_el[1:-1], 
-                                    vec_seq_el[-1]])
+                                    dur_i_t])
                     ph_seq.append(ph_seq_el.tolist())
-                self.vec_sample.append(vec_seq)
-                self.phone_sample.append(ph_seq)
+                if self.mulout:
+                    spk_name = self.idx2spk[vec_seq_el[0]] 
+                    if spk_name not in self.vec_sample:
+                        self.vec_sample[spk_name] = []
+                        self.phone_sample[spk_name] = []
+                    self.vec_sample[spk_name].append(vec_seq)
+                    self.phone_sample[spk_name].append(ph_seq)
+                else:
+                    self.vec_sample.append(vec_seq)
+                    self.phone_sample.append(ph_seq)
             print('-' * 50)
         end_t = timeit.default_timer()
         print('TCSTAR_dur-{} > Vectorized dur samples in {:.4f} '
@@ -434,12 +494,35 @@ class TCSTAR_dur(TCSTAR):
             ndur = dur
         return ndur
 
-    def __getitem__(self, index):
-        # return seq of triplets (spk_idx, code, ndur) and seq of (ph_id_str)
-        return self.vec_sample[index], self.phone_sample[index]
+    def __getitem__(self, index, spk_key=None):
+        if isinstance(self.vec_sample, dict):
+            # select hierarchicaly, first speaker, and then that speaker's sample
+            if spk_key is None:
+                raise IndexError('Accessing MO Dataset with SO format. Use the '
+                                 'proper Sampler in your loader please.')
+            return self.vec_sample[spk_key][index], \
+                   self.phone_sample[spk_key][index]
+        else:
+            # return seq of triplets (spk_idx, code, ndur) and 
+            # seq of (ph_id_str)
+            return self.vec_sample[index], self.phone_sample[index]
 
     def __len__(self):
-        return len(self.vec_sample)
+        if isinstance(self.vec_sample, dict):
+            # sup up all keys length for final len on num of samples
+            total_samples = sum(len(spk_samples) for spkname, spk_samples in
+                                self.vec_sample.items())
+        else:
+            # directly compute list length
+            total_samples = len(self.vec_sample)
+        return total_samples
+
+    def len_by_spk(self):
+        if not isinstance(self.vec_sample, dict):
+            raise TypeError('Cannot get len_by_spk w/ SO format')
+        else:
+            lens = dict((k, len(v)) for k, v in self.vec_sample.items())
+            return lens
 
 
 class TCSTAR_aco(TCSTAR):
@@ -483,6 +566,7 @@ class TCSTAR_aco(TCSTAR):
                 self.labs.append((spk['name'], id_))
             if not os.path.exists(lab_codebooks_path) or self.force_gen:
                 async_f = read_speaker_labs
+                # TODO: beware, not filtering durs
                 async_args = (spk['name'], spk[self.split], self.lab_dir,
                               lab_parser)
                 spk['result'] = parse_pool.apply_async(async_f, async_args)
