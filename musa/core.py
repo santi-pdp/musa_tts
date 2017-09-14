@@ -10,15 +10,20 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
                  epochs, save_path, model_savename, tr_opts={}, eval_fn=None, 
                  val_dloader=None, eval_stats=None, eval_target=None, 
                  eval_patience=None, cuda=False, va_opts={}):
-    tr_loss = []
+    tr_loss = {}
     va_loss = {}
     min_va_loss = np.inf
     patience=eval_patience
     for epoch in range(epochs):
         best_model = False
-        tr_loss += train_fn(model, dloader, opt, log_freq, epoch,
-                            criterion=train_criterion,
-                            cuda=cuda, tr_opts=tr_opts.copy())
+        tr_e_loss = train_fn(model, dloader, opt, log_freq, epoch,
+                             criterion=train_criterion,
+                             cuda=cuda, tr_opts=tr_opts.copy())
+        for k, v in tr_e_loss.items():
+            if k not in tr_loss:
+                tr_loss[k] = [v]
+            else:
+                tr_loss[k].append(v)
         if eval_fn:
             if val_dloader is None:
                 raise ValueError('Train engine: please specify '
@@ -54,27 +59,45 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
                         break
         model.save(save_path, model_savename, epoch,
                    best_val=best_model)
-        print('Saving training loss')
-        np.save(os.path.join(save_path, 'tr_loss'), tr_loss)
+        for k, v in tr_loss.items():
+            print('Saving training loss ', k)
+            np.save(os.path.join(save_path, k), v)
         if eval_target:
             for k, v in va_loss.items():
                 print('Saving val score ', k)
                 np.save(os.path.join(save_path, k), v)
 
 def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
-                    criterion=None, cuda=False, tr_opts={}):
+                    criterion=None, cuda=False, tr_opts={},
+                    spk2durstats=None):
     model.train()
     stateful = False
     if 'stateful' in tr_opts:
         stateful = True
         tr_opts.pop('stateful')
+    spk2durstats = None
+    if 'spk2durstats' in tr_opts:
+        print('Getting spk2durstats')
+        spk2durstats = tr_opts.pop('spk2durstats')
+    mulout = False
+    if 'mulout' in tr_opts:
+        print('Multi-Output dur training')
+        mulout = tr_opts.pop('mulout')
+        if 'idx2spk' in tr_opts:
+            idx2spk = tr_opts.pop('idx2spk')
+        else:
+            raise ValueError('Specify a idx2spk in training opts '
+                             'when using MO.')
     assert len(tr_opts) == 0, 'unrecognized params passed in: '\
                               '{}'.format(tr_opts.keys())
-    epoch_losses = []
+    epoch_losses = {}
     num_batches = len(dloader)
     for b_idx, batch in enumerate(dloader):
         # decompose the batch into the sub-batches
-        spk_b, lab_b, dur_b, slen_b, _ = batch
+        spk_b, lab_b, dur_b, slen_b, ph_b = batch
+        # build batch of curr_ph to filter out results without sil phones
+        # size of curr_ph_b [bsize, seqlen]
+        curr_ph_b = [[ph[2] for ph in ph_s] for ph_s in ph_b]
         # convert all into variables and transpose (we want time-major)
         spk_b = Variable(spk_b).transpose(0,1).contiguous()
         lab_b = Variable(lab_b).transpose(0,1).contiguous()
@@ -100,27 +123,72 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
             states = var_to_cuda(states)
         # forward through model
         y, states = model(lab_b, states, speaker_idx=spk_b)
+        if isinstance(y, dict):
+            # we have a MO model, pick the right spk
+            spk_name = idx2spk[spk_b.cpu().data[0,0]]
+            # print('Extracting y prediction for MO spk ', spk_name)
+            y = y[spk_name]
+        q_classes = False
         #print('y size: ', y.size())
         #print('states[0] size: ', states[0].size())
         # compute loss
         if criterion == F.nll_loss:
             y = y.view(-1, y.size(-1))
             dur_b = dur_b.view(-1)
+            q_classes = True
+        y = y.squeeze(-1)
+        preds = None
+        gtruths = None
+        seqlens = None
+        spks = None
+        # make the silence mask
+        sil_mask = None
+        preds, gtruths, \
+        spks, sil_mask = predict_masked_rmse(y, dur_b, slen_b, 
+                                             spk_b, curr_ph_b,
+                                             preds, gtruths,
+                                             spks, sil_mask,
+                                             'pau',
+                                             q_classes)
+        #print('Tr After batch preds shape: ', preds.shape)
+        #print('Tr After batch gtruths shape: ', gtruths.shape)
+        #print('Tr After batch sil_mask shape: ', sil_mask.shape)
+        # denorm with normalization stats
+        assert spk2durstats is not None
+        preds, gtruths = denorm_dur_preds_gtruth(preds, gtruths,
+                                                 spks, spk2durstats,
+                                                 q_classes)
+        #print('preds[:20] = ', preds[:20])
+        #print('gtruths[:20] = ', gtruths[:20])
+        #print('pred min: {}, max: {}'.format(preds.min(), preds.max()))
+        #print('gtruths min: {}, max: {}'.format(gtruths.min(), gtruths.max()))
+        nosil_dur_rmse = rmse(preds * sil_mask, gtruths * sil_mask) * 1e3
         #print('y size: ', y.size())
         #print('dur_b: ', dur_b.size())
-        loss = criterion(y.squeeze(-1), dur_b,
+        loss = criterion(y, dur_b,
                          size_average=True)
         #print('batch {:4d}: loss: {:.5f}'.format(b_idx + 1, loss.data[0]))
         opt.zero_grad()
         loss.backward()
         opt.step()
+        #print('y size: ', y.size())
         if (b_idx + 1) % log_freq == 0 or (b_idx + 1) >= num_batches:
+
             print('batch {:4d}/{:4d} (epoch {:3d}) loss '
-                  '{:.5f}'.format(b_idx + 1, num_batches, epoch_idx,
-                                  loss.data[0]))
-            epoch_losses.append(loss.data[0])
+                  '{:.5f}, rmse {:.5f}ms'.format(b_idx + 1, 
+                                                 num_batches, 
+                                                 epoch_idx,
+                                                 loss.data[0],
+                                                 nosil_dur_rmse))
+            if 'tr_loss' not in epoch_losses:
+                epoch_losses['tr_loss'] = [loss.data[0]]
+                epoch_losses['tr_rmse'] = [nosil_dur_rmse]
+            else:
+                epoch_losses['tr_loss'].append(loss.data[0])
+                epoch_losses['tr_rmse'].append(nosil_dur_rmse)
+            #epoch_losses.append(loss.data[0])
     print('-- Finished epoch {:4d}, mean tr loss: '
-          '{:.5f}'.format(epoch_idx, np.mean(epoch_losses)))
+          '{:.5f}'.format(epoch_idx, np.mean(epoch_losses['tr_loss'])))
     return epoch_losses
 
 def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
@@ -132,6 +200,14 @@ def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
         sil_id = va_opts.pop('sil_id')
     if 'q_classes' in va_opts:
         q_classes= va_opts.pop('q_classes')
+    if 'mulout' in va_opts:
+        print('Multi-Output dur evaluation')
+        mulout = va_opts.pop('mulout')
+        if 'idx2spk' in va_opts:
+            idx2spk = va_opts.pop('idx2spk')
+        else:
+            raise ValueError('Specify a idx2spk in eval opts '
+                             'when using MO.')
     assert len(va_opts) == 0, 'unrecognized params passed in: '\
                               '{}'.format(va_opts.keys())
     spk2durstats=stats
@@ -164,94 +240,27 @@ def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
             states = var_to_cuda(states)
         # forward through model
         y, states = model(lab_b, states, speaker_idx=spk_b)
+        if isinstance(y, dict):
+            # we have a MO model, pick the right spk
+            spk_name = idx2spk[spk_b.cpu().data[0,0]]
+            # print('Extracting y prediction for MO spk ', spk_name)
+            y = y[spk_name]
         y = y.squeeze(-1)
-        y_npy = y.cpu().data.transpose(0,1).numpy()
-        dur_npy = dur_b.cpu().data.transpose(0,1).numpy()
-        slens_npy = slen_b.cpu().data.numpy()
-        spk_npy = spk_b.cpu().data.transpose(0,1).numpy()
-        # first, select sequences within permitted lengths (remove pad)
-        for ii, (y_i, dur_i, spk_i, slen_i) in enumerate(zip(y_npy, 
-                                                             dur_npy, 
-                                                             spk_npy, 
-                                                             slens_npy)):
-            # get curr phoneme identity
-            curr_ph_seq = curr_ph_b[ii]
-            # create seq_mask
-            curr_ph_seq_mask = np.zeros((slen_i,))
-            for t_ in range(slen_i):
-                curr_ph = curr_ph_seq[t_]
-                if curr_ph != sil_id:
-                    curr_ph_seq_mask[t_] = 1.
-                else:
-                    curr_ph_seq_mask[t_] = 0.
-            if preds is None:
-                #print('Trimming seqlen {}/{}'.format(slen_i, y_i.shape[0]))
-                if q_classes is not None:
-                    max_y_i = []
-                    # have to argmax directly y_i seq
-                    for y_i_t in y_i:
-                        max_y_i.append(np.argmax(y_i_t))
-                    preds = np.array(max_y_i[:slen_i], dtype=np.float32)
-                else:
-                    # just single output y_i_t
-                    preds = np.array(y_i[:slen_i], dtype=np.float32)
-                gtruths = np.array(dur_i[:slen_i], dtype=np.float32)
-                spks = spk_i[:slen_i]
-                sil_mask = curr_ph_seq_mask
-            else:
-                #print('Trimming seqlen {}/{}'.format(slen_i, y_i.shape[0]))
-                if q_classes is not None:
-                    max_y_i = []
-                    # have to argmax directly y_i seq
-                    for y_i_t in y_i:
-                        max_y_i.append(np.argmax(y_i_t))
-                    preds = np.concatenate((preds, np.array(max_y_i[:slen_i], 
-                                                            dtype=np.float32)))
-                else:
-                    preds = np.concatenate((preds, np.array(y_i[:slen_i],
-                                                            dtype=np.float32)))
-                gtruths = np.concatenate((gtruths, np.array(dur_i[:slen_i],
-                                                            dtype=np.float32)))
-                spks = np.concatenate((spks, spk_i[:slen_i]))
-                #print('concatenating sil_mask shape: ', sil_mask.shape)
-                #print('with curr_ph_seq_mask shape: ', curr_ph_seq_mask.shape)
-                sil_mask = np.concatenate((sil_mask, curr_ph_seq_mask))
+        preds, gtruths, \
+        spks, sil_mask = predict_masked_rmse(y, dur_b, slen_b, 
+                                             spk_b, curr_ph_b,
+                                             preds, gtruths,
+                                             spks, sil_mask,
+                                             sil_id,
+                                             q_classes)
     #print('After batch preds shape: ', preds.shape)
     #print('After batch gtruths shape: ', gtruths.shape)
     #print('After batch sil_mask shape: ', sil_mask.shape)
     # denorm with normalization stats
     assert spk2durstats is not None
-    # denorm based on spk_id stats
-    for ii, (spk_i, dur_i, y_i) in enumerate(zip(spks, gtruths, 
-                                                 preds)):
-        dur_stats = spk2durstats[spk_i]
-        if q_classes:
-            kmeans = dur_stats#['dur_clusters']
-            # map gtruths idxes to centroid values
-            ccs = kmeans.cluster_centers_
-            dur_cc = ccs[dur_i][0]
-            #print('Groundtruth cc {} from dur {}'.format(dur_cc,
-            #                                             dur_i))
-            gtruths[ii] = dur_cc
-            # get max of predictions
-            #print('Argmax pred: ', y_i)
-            pred_cc = ccs[y_i]
-            #print('Prediction cc {} from dur {}'.format(pred_cc,
-            #                                            y_i))
-            preds[ii] = pred_cc
-            #print('gtruth: {} s'.format(gtruths[ii]))
-            #print('pred: {} s'.format(preds[ii]))
-        else:
-            dur_min = dur_stats['min']
-            dur_max = dur_stats['max']
-            preds[ii] = denorm_minmax(y_i, dur_min, dur_max)
-            gtruths[ii] = denorm_minmax(dur_i, dur_min, dur_max)
-        #print('Denorming spk {} min: {}, max: {}'.format(spk_i, dur_min,
-        #                                                 dur_max))
-        #print('denorm {}-pred: {} s'.format(ii, preds[ii]))
-        #print('denorm {}-gtruths: {} s'.format(ii, gtruths[ii]))
-        # decode with kmeans object
-        kmeans = spk2durstats[spk_i]
+    preds, gtruths = denorm_dur_preds_gtruth(preds, gtruths,
+                                             spks, spk2durstats,
+                                             q_classes)
     dur_rmse = rmse(preds, gtruths) * 1e3
     nosil_dur_rmse = rmse(preds * sil_mask, gtruths * sil_mask) * 1e3
     print('Evaluated dur mRMSE [ms]: {:.3f}'.format(dur_rmse))
