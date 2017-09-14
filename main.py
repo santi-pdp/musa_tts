@@ -22,14 +22,23 @@ def main(opts):
                           parse_workers=opts.parser_workers,
                           max_seq_len=opts.dur_max_seq_len,
                           batch_size=opts.batch_size,
-                          q_classes=opts.dur_q_classes)
+                          q_classes=opts.dur_q_classes,
+                          mulout=opts.dur_mulout)
+        # can be dur norm or kmeans data
         spk2durstats = dset.spk2durstats
         try:
             print('Spk2durstats: ', json.dumps(spk2durstats, indent=2))
         except TypeError as e:
             print(e)
-        dloader = DataLoader(dset, batch_size=opts.batch_size, shuffle=True,
+        if opts.dur_mulout:
+            sampler = MOSampler(dset.len_by_spk(), dset, opts.batch_size)
+            shuffle = False
+        else:
+            sampler = None
+            shuffle = True
+        dloader = DataLoader(dset, batch_size=opts.batch_size, shuffle=shuffle,
                              num_workers=opts.loader_workers, 
+                             sampler=sampler,
                              collate_fn=varlen_dur_collate)
         # build validation dataset and loader
         val_dset = TCSTAR_dur(opts.cfg_spk, 'valid',
@@ -39,10 +48,16 @@ def main(opts):
                               parse_workers=opts.parser_workers,
                               max_seq_len=opts.dur_max_seq_len,
                               batch_size=opts.batch_size,
-                              q_classes=opts.dur_q_classes)
+                              q_classes=opts.dur_q_classes,
+                              mulout=opts.dur_mulout)
+        if opts.dur_mulout:
+            va_sampler = MOSampler(dset.len_by_spk(), dset, opts.batch_size)
+        else:
+            va_sampler = None
         val_dloader = DataLoader(val_dset, batch_size=opts.batch_size,
                                  shuffle=False,
                                  num_workers=opts.loader_workers, 
+                                 sampler=va_sampler,
                                  collate_fn=varlen_dur_collate)
         if opts.dur_q_classes is not None:
             dur_outputs = opts.dur_q_classes
@@ -56,7 +71,8 @@ def main(opts):
                                     rnn_layers=opts.dur_rnn_layers,
                                     sigmoid_out=opts.sigmoid_dur,
                                     dropout=opts.dur_dout,
-                                    speakers=list(dset.spk2idx.keys()))
+                                    speakers=list(dset.spk2idx.keys()),
+                                    mulout=opts.dur_mulout)
         adam = optim.Adam(dur_model.parameters(), lr=opts.dur_lr)
         if opts.cuda:
             dur_model.cuda()
@@ -81,10 +97,18 @@ def main(opts):
             else:
                 raise ValueError('Dur loss not recognized: '
                                  '{}'.format(opts.dur_loss))
-        tr_opts = {}
+        tr_opts = {'spk2durstats':spk2durstats}
         if opts.dur_max_seq_len is not None:
             # we have a stateful approach
-            tr_opts = {'stateful':True}
+            tr_opts['stateful'] = True
+        va_opts = {}
+        if opts.dur_mulout:
+            tr_opts['mulout'] = True
+            tr_opts['idx2spk'] = dset.idx2spk
+            va_opts['mulout'] = True
+            va_opts['idx2spk'] = dset.idx2spk
+        if opts.dur_q_classes is not None:
+            va_opts = {'q_classes':True}
         train_engine(dur_model, dloader, adam, opts.log_freq, train_dur_epoch,
                      criterion,
                      opts.epoch, opts.save_path, 'dur_model.ckpt',
@@ -94,7 +118,7 @@ def main(opts):
                      eval_target='total_nosil_dur_rmse',
                      eval_patience=opts.patience,
                      cuda=opts.cuda,
-                     va_opts={'q_classes':True})
+                     va_opts=va_opts)
 
 
 if __name__ == '__main__':
@@ -113,7 +137,7 @@ if __name__ == '__main__':
     parser.add_argument('--dur_max_samples', type=int, default=None,
                         help='Max samples per speaker in dur loader')
     parser.add_argument('--dur_rnn_size', type=int, default=256)
-    parser.add_argument('--dur_rnn_layers', type=int, default=2)
+    parser.add_argument('--dur_rnn_layers', type=int, default=1)
     parser.add_argument('--dur_emb_size', type=int, default=256)
     parser.add_argument('--dur_q_classes', type=int, default=None,
                         help='Num of clusters in dur quantization. '
@@ -128,14 +152,20 @@ if __name__ == '__main__':
     parser.add_argument('--epoch', type=int, default=50)
     parser.add_argument('--log_freq', type=int, default=25)
     parser.add_argument('--patience', type=int, default=5)
+    parser.add_argument('--seed', type=int, default=1991)
     parser.add_argument('--dur_lr', type=float, default=0.001)
     parser.add_argument('--dur_max_seq_len', type=int, default=None)
     parser.add_argument('--loader_workers', type=int, default=2)
     parser.add_argument('--parser_workers', type=int, default=4)
     parser.add_argument('--cuda', default=False, action='store_true')
+    parser.add_argument('--dur_mulout', default=False, action='store_true')
 
     opts = parser.parse_args()
     print('Parsed opts: ', json.dumps(vars(opts), indent=2))
     if not os.path.exists(opts.save_path):
         os.makedirs(opts.save_path)
+    torch.manual_seed(opts.seed)
+    np.random.seed(opts.seed)
+    if opts.cuda:
+        torch.cuda.manual_seed(opts.seed)
     main(opts)

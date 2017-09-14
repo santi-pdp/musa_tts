@@ -40,7 +40,7 @@ class MOSampler(Sampler):
             shuffle(spk_idces[k])
         # including smaller batch in the end
         n_rounds = int(np.ceil(N / self.batch_size))
-        print('num rounds: ', n_rounds)
+        #print('num rounds: ', n_rounds)
         epoch_ids = []
         # make the list of indeces of every round
         for beg_i in range(0, N, self.batch_size):
@@ -49,7 +49,7 @@ class MOSampler(Sampler):
             if N - beg_i < self.batch_size:
                 left = N - beg_i
             for spkname in spks:
-                print('Fetching spk {} beg_i {}'.format(spkname, beg_i))
+                #print('Fetching spk {} beg_i {}'.format(spkname, beg_i))
                 batch = [(ii, spkname) for ii in \
                          range(beg_i,beg_i+left)]
                 epoch_ids += batch

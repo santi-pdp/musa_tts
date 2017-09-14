@@ -80,7 +80,7 @@ class label_encoder(object):
                             # init dictionary codebook
                             codebooks[cbook] = {'UNK':0}
                         # process categorical input adding to vocab if needed
-                        if lab_el == 'UNKOWN':
+                        if lab_el == 'UNKNOWN':
                             # ignore hard-coded UNKNOWN if appears
                             continue
                         if lab_el not in codebooks[cbook]:
@@ -155,7 +155,10 @@ class label_encoder(object):
             try:
                 cbook = self.codebook_name[lab_i - 1] # indexed from 0
                 if lab_format[lab_i] == 'cate':
-                    cate_code = codebooks[cbook][lab_el]
+                    try:
+                        cate_code = codebooks[cbook][lab_el]
+                    except KeyError:
+                        cate_code = codebooks[cbook]['UNK']
                     code_len = len(codebooks[cbook].keys())
                     if verbose:
                         print('Lab encoding {}: categorical element {} -> '
@@ -379,3 +382,23 @@ def process_lab_line(lab_line, querist, l_encoder, l_parser,
     bitstream += '\t' + answers
     # just in case we want to check the label being processed
     return [time_stamp, bitstream, sp_ph]
+
+def tstamps_to_dur(tstamps, flat_input=False):
+    # convert the list of lists of tstamps [[beg_1, end_1], ...] to durs
+    # in seconds
+    # flat means there is one level of list, so list of lists of tstamps
+    # no flat means there are two levels, list of lists of lists (3-D tensor)
+    durs = []
+    if flat_input:
+        for t_i, tss in enumerate(tstamps):
+            beg_t, end_t = map(float, tss)
+            durs.append((end_t - beg_t) / 1e7)
+    else:
+        for seq in tstamps:
+            #durs_t = []
+            durs_t = tstamps_to_dur(seq, flat_input=True)
+            #for t_i, tss in enumerate(seq):
+            #    beg_t, end_t = map(float, tss)
+            #    durs_t.append((end_t - beg_t) / 1e7)
+            durs.append(durs_t)
+    return durs
