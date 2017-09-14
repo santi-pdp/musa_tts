@@ -363,7 +363,8 @@ class TCSTAR_dur(TCSTAR):
                 vec_seq = [None] * len(dur_seq)
                 phone_seq = [None] * len(dur_seq)
                 for t_, (dur, lab) in enumerate(zip(dur_seq, lab_seq)):
-                    code = lab_enc(lab, normalize='minmax', sort_types=False)
+                    code = lab_enc(lab, normalize='minmax', sort_types=False,
+                                   verbose=False)
                     # store reference to phoneme labels (to filter if needed)
                     phone_seq[t_] = lab[:5]
                     ndur = self.process_dur(spk, dur)
@@ -373,7 +374,7 @@ class TCSTAR_dur(TCSTAR):
                     vec_seq[t_] = [self.spk2idx[spk], code, ndur]
                     if not hasattr(self, 'ling_feats_dim'):
                         self.ling_feats_dim = len(code)
-                        print('setting ling feats dim: ', len(code))
+                        print('Setting ling feats dim: ', len(code))
                 if self.mulout:
                     spk_name = spk
                     if spk_name not in self.vec_sample:
@@ -494,12 +495,14 @@ class TCSTAR_dur(TCSTAR):
             ndur = dur
         return ndur
 
-    def __getitem__(self, index, spk_key=None):
+    def __getitem__(self, index):
         if isinstance(self.vec_sample, dict):
             # select hierarchicaly, first speaker, and then that speaker's sample
-            if spk_key is None:
+            if not isinstance(index, tuple):
                 raise IndexError('Accessing MO Dataset with SO format. Use the '
                                  'proper Sampler in your loader please.')
+            spk_key = index[1]
+            index = index[0]
             return self.vec_sample[spk_key][index], \
                    self.phone_sample[spk_key][index]
         else:
