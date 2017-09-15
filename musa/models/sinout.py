@@ -64,7 +64,6 @@ class sinout_acoustic(speaker_model):
                          in_h.size(-1))
         if self.speakers is not None:
             emb_h = self.emb(speaker_idx)
-            print('emb_h: ', emb_h.size())
             # concat embeddings to first-layer activations
             in_h = torch.cat([in_h, emb_h], dim=-1)
         x = self.emb_fc(in_h.view(-1, in_h.size(-1)))
@@ -86,7 +85,8 @@ class sinout_duration(speaker_model):
     """ Baseline single output duration model """
 
     def __init__(self, num_inputs, num_outputs, emb_size, rnn_size, rnn_layers,
-                 dropout, sigmoid_out=False, speakers=None, mulout=False):
+                 dropout, sigmoid_out=False, speakers=None, mulout=False,
+                 cuda=False):
         super(sinout_duration, self).__init__()
         """
         # Arguments
@@ -141,8 +141,11 @@ class sinout_duration(speaker_model):
         if self.mulout:
             # Multi-Output model
             # make as many out layers as speakers
-            self.out_fc = dict((k, nn.Linear(self.rnn_size, self.num_outputs)) \
-                                for k in self.speakers)
+            self.out_fc = {}
+            for k in self.speakers:
+                self.out_fc[k] = nn.Linear(self.rnn_size, self.num_outputs)
+                if cuda:
+                    self.out_fc[k].cuda()
         else:
             # just one output
             self.out_fc = nn.Linear(self.rnn_size, self.num_outputs)
@@ -167,6 +170,7 @@ class sinout_duration(speaker_model):
                          in_h.size(-1))
         if self.speakers is not None and not self.mulout:
             emb_h = self.emb(speaker_idx)
+            #print('emb_h size: ', emb_h.size())
             # concat embeddings to first-layer activations
             in_h = torch.cat([in_h, emb_h], dim=-1)
         x = self.emb_fc(in_h.view(-1, in_h.size(-1)))

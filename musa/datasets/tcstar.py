@@ -11,6 +11,7 @@ import timeit
 import numpy as np
 import multiprocessing as mp
 from sklearn.cluster import KMeans
+import copy
 
 
 def read_speaker_labs(spk_name, ids_list, lab_dir, lab_parser,
@@ -160,7 +161,8 @@ class TCSTAR(Dataset):
                  ogmios_lab=True, parse_workers=4,
                  max_seq_len=None, batch_size=None,
                  max_spk_samples=None,
-                 mulout=False):
+                 mulout=False, exclude_train_spks=[],
+                 exclude_eval_spks=[]):
         """
         # Arguments:
             max_seq_len: if specified, batches are stateful-like
@@ -178,16 +180,32 @@ class TCSTAR(Dataset):
         self.max_seq_len = max_seq_len
         self.mulout = mulout
         self.batch_size = batch_size
+        self.exclude_train_spks = exclude_train_spks
         with open(spk_cfg_file, 'rb') as cfg_f:
             # load speakers config paths
             self.speakers = pickle.load(cfg_f)
+            self.all_speakers = copy.deepcopy(self.speakers)
+            if split == 'train':
+                # filter speakers in exclude list
+                for spk in self.all_speakers.keys():
+                    if spk in exclude_train_spks:
+                        print('Excluding speaker {} from train '
+                              'split'.format(spk))
+                        del self.speakers[spk]
+            if split == 'valid':
+                # filter speakers in exclude list
+                for spk in self.all_speakers.keys():
+                    if spk in exclude_eval_spks:
+                        print('Excluding speaker {} from valid '
+                              'split'.format(spk))
+                        del self.speakers[spk]
         # store spk2idx
         fspk = list(self.speakers.keys())[0]
         if 'idx' not in self.speakers[fspk]:
             print('Indexing speakers with their ids...')
             # index speakers with integer ids
             self.spk2idx = dict((sname, i) for i, sname in
-                                enumerate(self.speakers.keys()))
+                                enumerate(self.all_speakers.keys()))
             for spk,idx in self.spk2idx.items():
                 self.speakers[spk]['idx'] = idx
             print('Created ids: ', json.dumps(self.spk2idx, indent=2))
@@ -208,8 +226,12 @@ class TCSTAR(Dataset):
         self.load_lab()
         # save stats in case anything changed
         with open(spk_cfg_file, 'wb') as cfg_f:
+            # update original speakers, excluded ones in
+            # train will be unmodified
+            for spk, spkval in self.speakers.items():
+                self.all_speakers[spk] = spkval
             # load speakers config paths
-            pickle.dump(self.speakers, cfg_f)
+            pickle.dump(self.all_speakers, cfg_f)
 
     def load_lab(self):
         raise NotImplementedError
@@ -224,7 +246,8 @@ class TCSTAR_dur(TCSTAR):
                  ogmios_lab=True, parse_workers=4, 
                  max_seq_len=None, batch_size=None,
                  max_spk_samples=None, 
-                 mulout=False,
+                 mulout=False, exclude_train_spks=[],
+                 exclude_eval_spks=[],
                  q_classes=None,
                  norm_dur=True):
         """
@@ -243,6 +266,8 @@ class TCSTAR_dur(TCSTAR):
                                          parse_workers=parse_workers,
                                          max_seq_len=max_seq_len,
                                          mulout=mulout,
+                                         exclude_train_spks=exclude_train_spks,
+                                         exclude_eval_spks=exclude_eval_spks,
                                          batch_size=batch_size,
                                          max_spk_samples=max_spk_samples)
 
@@ -531,7 +556,7 @@ class TCSTAR_dur(TCSTAR):
 class TCSTAR_aco(TCSTAR):
 
     def __init__(self, spk_cfg_file, split, aco_dir, lab_dir,
-                 lab_codebooks_path, force_gen=False,
+                 lab_codebooks_path, force_gen=False, exclude_train_spks=[],
                  ogmios_lab=True, parse_workers=4, 
                  aco_window_stride=80, aco_window_len=320, 
                  aco_frame_rate=16000):
