@@ -22,10 +22,24 @@ def repackage_hidden(h, curr_bsz):
         return tuple(repackage_hidden(v, curr_bsz).contiguous() for v in h)
 
 
-def rmse(prediction, groundtruth):
+def rmse(prediction, groundtruth, spks=None):
     assert prediction.shape == groundtruth.shape
     D = np.sqrt(np.mean((groundtruth - prediction) ** 2, axis=0))
-    return D
+    if spks is not None:
+        spk_durs = {}
+        for (pred, gtruth, spk) in zip(prediction, groundtruth,
+                                       spks):
+            if str(spk) not in spk_durs:
+                spk_durs[str(spk)] = []
+            spk_durs[str(spk)].append((gtruth - pred) ** 2)
+        spks = (spk_durs.keys())
+        for spk in spks:
+            diffs = spk_durs[spk]
+            avg = np.mean(diffs, axis=0)
+            spk_durs[spk] = np.sqrt(avg)
+        return D, spk_durs
+    else:
+        return D
 
 def denorm_minmax(y, out_min, out_max):
     # x = y * (max - min) + min

@@ -3,6 +3,7 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from .utils import *
 import numpy as np
+import json
 import os
 
 
@@ -70,6 +71,8 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
 def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
                     criterion=None, cuda=False, tr_opts={},
                     spk2durstats=None):
+    # When mulout is True (MO), log_freq is per round, not batch
+    # note that a round will have N batches
     model.train()
     stateful = False
     if 'stateful' in tr_opts:
@@ -79,19 +82,26 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
     if 'spk2durstats' in tr_opts:
         print('Getting spk2durstats')
         spk2durstats = tr_opts.pop('spk2durstats')
+    idx2spk = None
+    if 'idx2spk' in tr_opts:
+        idx2spk = tr_opts.pop('idx2spk')
     mulout = False
+    round_N = 1
     if 'mulout' in tr_opts:
         print('Multi-Output dur training')
         mulout = tr_opts.pop('mulout')
-        if 'idx2spk' in tr_opts:
-            idx2spk = tr_opts.pop('idx2spk')
-        else:
+        round_N = len(list(idx2spk.keys()))
+        if idx2spk is None:
             raise ValueError('Specify a idx2spk in training opts '
                              'when using MO.')
     assert len(tr_opts) == 0, 'unrecognized params passed in: '\
                               '{}'.format(tr_opts.keys())
     epoch_losses = {}
     num_batches = len(dloader)
+    if mulout:
+        # keep track of the losses per round to make a proper log
+        # when MO is running 
+        spk_loss_batch = {}
     for b_idx, batch in enumerate(dloader):
         # decompose the batch into the sub-batches
         spk_b, lab_b, dur_b, slen_b, ph_b = batch
@@ -102,6 +112,7 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
         spk_b = Variable(spk_b).transpose(0,1).contiguous()
         lab_b = Variable(lab_b).transpose(0,1).contiguous()
         dur_b = Variable(dur_b).transpose(0,1).contiguous()
+        #print('dur_b size: ', dur_b.size())
         slen_b = Variable(slen_b)
         # get curr batch size
         curr_bsz = spk_b.size(1)
@@ -131,64 +142,87 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
         q_classes = False
         #print('y size: ', y.size())
         #print('states[0] size: ', states[0].size())
+        y = y.squeeze(-1)
+        if criterion != F.nll_loss:
+            preds = None
+            gtruths = None
+            seqlens = None
+            spks = None
+            # make the silence mask
+            sil_mask = None
+            preds, gtruths, \
+            spks, sil_mask = predict_masked_rmse(y, dur_b, slen_b, 
+                                                 spk_b, curr_ph_b,
+                                                 preds, gtruths,
+                                                 spks, sil_mask,
+                                                 'pau',
+                                                 q_classes)
+            #print('Tr After batch preds shape: ', preds.shape)
+            #print('Tr After batch gtruths shape: ', gtruths.shape)
+            #print('Tr After batch sil_mask shape: ', sil_mask.shape)
+            # denorm with normalization stats
+            assert spk2durstats is not None
+            preds, gtruths = denorm_dur_preds_gtruth(preds, gtruths,
+                                                     spks, spk2durstats,
+                                                     q_classes)
+            #print('preds[:20] = ', preds[:20])
+            #print('gtruths[:20] = ', gtruths[:20])
+            #print('pred min: {}, max: {}'.format(preds.min(), preds.max()))
+            #print('gtruths min: {}, max: {}'.format(gtruths.min(), gtruths.max()))
+            nosil_dur_rmse = rmse(preds * sil_mask, gtruths * sil_mask) * 1e3
+        else:
+            nosil_dur_rmse = None
         # compute loss
         if criterion == F.nll_loss:
             y = y.view(-1, y.size(-1))
             dur_b = dur_b.view(-1)
             q_classes = True
-        y = y.squeeze(-1)
-        preds = None
-        gtruths = None
-        seqlens = None
-        spks = None
-        # make the silence mask
-        sil_mask = None
-        preds, gtruths, \
-        spks, sil_mask = predict_masked_rmse(y, dur_b, slen_b, 
-                                             spk_b, curr_ph_b,
-                                             preds, gtruths,
-                                             spks, sil_mask,
-                                             'pau',
-                                             q_classes)
-        #print('Tr After batch preds shape: ', preds.shape)
-        #print('Tr After batch gtruths shape: ', gtruths.shape)
-        #print('Tr After batch sil_mask shape: ', sil_mask.shape)
-        # denorm with normalization stats
-        assert spk2durstats is not None
-        preds, gtruths = denorm_dur_preds_gtruth(preds, gtruths,
-                                                 spks, spk2durstats,
-                                                 q_classes)
-        #print('preds[:20] = ', preds[:20])
-        #print('gtruths[:20] = ', gtruths[:20])
-        #print('pred min: {}, max: {}'.format(preds.min(), preds.max()))
-        #print('gtruths min: {}, max: {}'.format(gtruths.min(), gtruths.max()))
-        nosil_dur_rmse = rmse(preds * sil_mask, gtruths * sil_mask) * 1e3
         #print('y size: ', y.size())
         #print('dur_b: ', dur_b.size())
         loss = criterion(y, dur_b,
                          size_average=True)
+        if mulout:
+            #print('Keeping {} spk loss'
+            #      ' {:.4f}'.format(idx2spk[spk_b[0,0].cpu().data[0]],
+            #                                          loss.data[0]))
+            spk_loss_batch[idx2spk[spk_b[0,0].cpu().data[0]]] = loss.data[0]
+                
         #print('batch {:4d}: loss: {:.5f}'.format(b_idx + 1, loss.data[0]))
         opt.zero_grad()
         loss.backward()
         opt.step()
         #print('y size: ', y.size())
-        if (b_idx + 1) % log_freq == 0 or (b_idx + 1) >= num_batches:
-
-            print('batch {:4d}/{:4d} (epoch {:3d}) loss '
-                  '{:.5f}, rmse {:.5f}ms'.format(b_idx + 1, 
-                                                 num_batches, 
-                                                 epoch_idx,
-                                                 loss.data[0],
-                                                 nosil_dur_rmse))
-            if 'tr_loss' not in epoch_losses:
-                epoch_losses['tr_loss'] = [loss.data[0]]
-                epoch_losses['tr_rmse'] = [nosil_dur_rmse]
+        if (b_idx + 1) % (round_N * log_freq) == 0 or \
+           (b_idx + 1) >= num_batches:
+            log_mesg = 'batch {:4d}/{:4d} (epoch {:3d})'.format(b_idx + 1,
+                                                                num_batches,
+                                                                epoch_idx)
+            if mulout:
+                log_mesg += ' MO losses: ('
+                for mok, moloss in spk_loss_batch.items():
+                    log_mesg += '{}:{:.3f},'.format(mok, moloss)
+                    loss_mo_name = 'mo-{}_tr_loss'.format(mok)
+                    if loss_mo_name not in epoch_losses:
+                        epoch_losses[loss_mo_name] = []
+                    epoch_losses[loss_mo_name].append(moloss)
+                log_mesg = log_mesg[:-1] + ')'
             else:
+                log_mesg += ' loss {:.5f}'.format(loss.data[0])
+                if nosil_dur_rmse is not None:
+                    log_mesg += ', rmse {:.5f} ms'.format(nosil_dur_rmse)
+                if 'tr_loss' not in epoch_losses:
+                    epoch_losses['tr_loss'] = []
+                    if nosil_dur_rmse:
+                        epoch_losses['tr_rmse'] = []
                 epoch_losses['tr_loss'].append(loss.data[0])
-                epoch_losses['tr_rmse'].append(nosil_dur_rmse)
-            #epoch_losses.append(loss.data[0])
-    print('-- Finished epoch {:4d}, mean tr loss: '
-          '{:.5f}'.format(epoch_idx, np.mean(epoch_losses['tr_loss'])))
+                if nosil_dur_rmse:
+                    epoch_losses['tr_rmse'].append(nosil_dur_rmse)
+            print(log_mesg)
+    end_log = '-- Finished epoch {:4d}, mean losses:'.format(epoch_idx)
+    for k, val in epoch_losses.items():
+        end_log += ' ({} : {:.5f})'.format(k, np.mean(val))
+    end_log += ' --'
+    print(end_log)
     return epoch_losses
 
 def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
@@ -200,12 +234,13 @@ def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
         sil_id = va_opts.pop('sil_id')
     if 'q_classes' in va_opts:
         q_classes= va_opts.pop('q_classes')
+    idx2spk = None
+    if 'idx2spk' in va_opts:
+        idx2spk = va_opts.pop('idx2spk')
     if 'mulout' in va_opts:
         print('Multi-Output dur evaluation')
         mulout = va_opts.pop('mulout')
-        if 'idx2spk' in va_opts:
-            idx2spk = va_opts.pop('idx2spk')
-        else:
+        if idx2spk is None:
             raise ValueError('Specify a idx2spk in eval opts '
                              'when using MO.')
     assert len(va_opts) == 0, 'unrecognized params passed in: '\
@@ -253,20 +288,34 @@ def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
                                              spks, sil_mask,
                                              sil_id,
                                              q_classes)
-    #print('After batch preds shape: ', preds.shape)
-    #print('After batch gtruths shape: ', gtruths.shape)
-    #print('After batch sil_mask shape: ', sil_mask.shape)
+    print('After batch preds shape: ', preds.shape)
+    print('After batch gtruths shape: ', gtruths.shape)
+    print('After batch sil_mask shape: ', sil_mask.shape)
+    print('After batch spks shape: ', spks.shape)
     # denorm with normalization stats
     assert spk2durstats is not None
     preds, gtruths = denorm_dur_preds_gtruth(preds, gtruths,
                                              spks, spk2durstats,
                                              q_classes)
-    dur_rmse = rmse(preds, gtruths) * 1e3
-    nosil_dur_rmse = rmse(preds * sil_mask, gtruths * sil_mask) * 1e3
+    dur_rmse, spks_rmse = rmse(preds, gtruths, spks)
+    dur_rmse *= 1e3
+    for k, v in spks_rmse.items():
+        spks_rmse[k] = v * 1e3
+    nosil_dur_rmse, \
+    nosil_spks_rmse = rmse(preds * sil_mask, 
+                           gtruths * sil_mask, spks)
+    nosil_dur_rmse *= 1e3
+    nosil_spkname_rmse = {}
+    for k, v in nosil_spks_rmse.items():
+        #nosil_spks_rmse[k] = v * 1e3
+        nosil_spkname_rmse[idx2spk[int(k)]] = v * 1e3
     print('Evaluated dur mRMSE [ms]: {:.3f}'.format(dur_rmse))
     print('Evaluated dur w/o sil phones mRMSE [ms]:'
           '{:.3f}'.format(nosil_dur_rmse))
-    # TODO: Make dur evaluation speaker-wise
-    return {'total_dur_rmse':dur_rmse, 'total_nosil_dur_rmse':nosil_dur_rmse}
+    print('Evaluated dur of spks: {}'.format(json.dumps(nosil_spkname_rmse,
+                                                        indent=2)))
+    nosil_spkname_rmse.update({'total_dur_rmse':dur_rmse,
+                               'total_nosil_dur_rmse':nosil_dur_rmse})
+    return nosil_spkname_rmse
 
 

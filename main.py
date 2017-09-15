@@ -18,6 +18,7 @@ def main(opts):
                           opts.lab_dir, opts.codebooks_dir,
                           force_gen=opts.force_gen,
                           norm_dur=True,
+                          exclude_train_spks=opts.exclude_train_spks,
                           max_spk_samples=opts.dur_max_samples,
                           parse_workers=opts.parser_workers,
                           max_seq_len=opts.dur_max_seq_len,
@@ -44,6 +45,7 @@ def main(opts):
         val_dset = TCSTAR_dur(opts.cfg_spk, 'valid',
                               opts.lab_dir, opts.codebooks_dir,
                               norm_dur=True,
+                              exclude_eval_spks=opts.exclude_eval_spks,
                               max_spk_samples=opts.dur_max_samples,
                               parse_workers=opts.parser_workers,
                               max_seq_len=opts.dur_max_seq_len,
@@ -71,8 +73,9 @@ def main(opts):
                                     rnn_layers=opts.dur_rnn_layers,
                                     sigmoid_out=opts.sigmoid_dur,
                                     dropout=opts.dur_dout,
-                                    speakers=list(dset.spk2idx.keys()),
-                                    mulout=opts.dur_mulout)
+                                    speakers=list(dset.all_speakers.keys()),
+                                    mulout=opts.dur_mulout,
+                                    cuda=opts.cuda)
         adam = optim.Adam(dur_model.parameters(), lr=opts.dur_lr)
         if opts.cuda:
             dur_model.cuda()
@@ -97,16 +100,15 @@ def main(opts):
             else:
                 raise ValueError('Dur loss not recognized: '
                                  '{}'.format(opts.dur_loss))
-        tr_opts = {'spk2durstats':spk2durstats}
+        tr_opts = {'spk2durstats':spk2durstats,
+                   'idx2spk':dset.idx2spk}
         if opts.dur_max_seq_len is not None:
             # we have a stateful approach
             tr_opts['stateful'] = True
-        va_opts = {}
+        va_opts = {'idx2spk':dset.idx2spk}
         if opts.dur_mulout:
             tr_opts['mulout'] = True
-            tr_opts['idx2spk'] = dset.idx2spk
             va_opts['mulout'] = True
-            va_opts['idx2spk'] = dset.idx2spk
         if opts.dur_q_classes is not None:
             va_opts = {'q_classes':True}
         train_engine(dur_model, dloader, adam, opts.log_freq, train_dur_epoch,
@@ -159,6 +161,8 @@ if __name__ == '__main__':
     parser.add_argument('--parser_workers', type=int, default=4)
     parser.add_argument('--cuda', default=False, action='store_true')
     parser.add_argument('--dur_mulout', default=False, action='store_true')
+    parser.add_argument('--exclude_train_spks', type=str, default=[], nargs='+')
+    parser.add_argument('--exclude_eval_spks', type=str, default=[], nargs='+')
 
     opts = parser.parse_args()
     print('Parsed opts: ', json.dumps(vars(opts), indent=2))
