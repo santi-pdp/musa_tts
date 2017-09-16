@@ -53,7 +53,7 @@ def main(opts):
                               q_classes=opts.dur_q_classes,
                               mulout=opts.dur_mulout)
         if opts.dur_mulout:
-            va_sampler = MOSampler(dset.len_by_spk(), dset, opts.batch_size)
+            va_sampler = MOSampler(val_dset.len_by_spk(), val_dset, opts.batch_size)
         else:
             va_sampler = None
         val_dloader = DataLoader(val_dset, batch_size=opts.batch_size,
@@ -110,7 +110,7 @@ def main(opts):
             tr_opts['mulout'] = True
             va_opts['mulout'] = True
         if opts.dur_q_classes is not None:
-            va_opts = {'q_classes':True}
+            va_opts['q_classes'] = True
         train_engine(dur_model, dloader, adam, opts.log_freq, train_dur_epoch,
                      criterion,
                      opts.epoch, opts.save_path, 'dur_model.ckpt',
