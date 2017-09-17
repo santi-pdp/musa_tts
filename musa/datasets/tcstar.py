@@ -87,7 +87,7 @@ def read_speaker_aco(spk_name, ids_list, aco_dir):
         lf0 = np.loadtxt(lf0_f)
         # make lf0 interpolation and obtain u/v flag
         i_lf0, uv = interpolation(lf0, 
-        unvoiced_symbol=-10000000000.0)
+                                  unvoiced_symbol=-10000000000.0)
         i_lf0 = i_lf0.reshape(-1, 1)
         uv = uv.reshape(-1, 1)
         # merge into aco structure
@@ -223,6 +223,7 @@ class TCSTAR(Dataset):
         self.parse_workers = parse_workers
         self.lab_codebooks_path = lab_codebooks_path
         self.max_spk_samples = max_spk_samples
+        # call load_lab
         self.load_lab()
         # save stats in case anything changed
         with open(spk_cfg_file, 'wb') as cfg_f:
@@ -236,6 +237,79 @@ class TCSTAR(Dataset):
     def load_lab(self):
         raise NotImplementedError
 
+
+    def parse_labs(self, lab_parser, compute_dur_stats=False, 
+                   compute_dur_classes=False):
+        total_parsed_labs = []
+        total_flat_labs = []
+        total_parsed_durs = []
+        total_parsed_spks = []
+        # prepare a multi-processing pool to parse labels faster
+        parse_pool = mp.Pool(self.parse_workers)
+        num_labs_total = sum(len(spk[self.split]) for sname, spk in
+                                 self.speakers.items())
+        if self.max_spk_samples is not None:
+            num_labs_total = self.max_spk_samples * len(self.speakers)
+        print('TCSTAR_dur-{} > Parsing {} labs from {} speakers. '
+              'Num workers: {}...'.format(self.split, 
+                                          num_labs_total,
+                                          len(self.speakers),
+                                          self.parse_workers))
+        for sname, spk in self.speakers.items():
+            async_f = read_speaker_labs
+            if self.max_spk_samples is not None:
+                spk_samples = spk[self.split][:self.max_spk_samples]
+            else:
+                spk_samples = spk[self.split]
+            async_args = (sname, spk_samples, self.lab_dir,
+                          lab_parser, True)
+            spk['result'] = parse_pool.apply_async(async_f, async_args)
+        parse_pool.close()
+        parse_pool.join()
+        for sname, spk in self.speakers.items():
+            result = spk['result'].get()
+            parsed_timestamps = result[1]
+            parsed_durs = tstamps_to_dur(parsed_timestamps)
+            if compute_dur_stats:
+            #if self.norm_dur:
+                if self.split == 'train' and ('dur_stats' not in spk or \
+                                              self.force_gen):
+                    flat_durs = [fd for dseq in parsed_durs for fd in dseq]
+                    # if they do not exist (or force_gen) and it's train split
+                    dur_min = np.min(flat_durs)
+                    assert dur_min > 0, dur_min
+                    dur_max = np.max(flat_durs)
+                    assert dur_max > 0, dur_max
+                    assert dur_max > dur_min, dur_max
+                    spk['dur_stats'] = {'min':dur_min,
+                                        'max':dur_max}
+                elif self.split != 'train' and 'dur_stats' not in spk:
+                    raise ValueError('Dur stats not available in spk config, '
+                                     'and norm_dur option was specified. Load '
+                                     'train split to solve this issue, or '
+                                     'pre-compute the stats.')
+            if compute_dur_classes:
+            #if self.q_classes is not None:
+                if self.split == 'train' and ('dur_clusters' not in spk or \
+                                              self.force_gen) and \
+                   self.q_classes is not None:
+                    flat_durs = [fd for dseq in parsed_durs for fd in dseq]
+                    flat_durs = np.array(flat_durs)
+                    flat_durs = flat_durs.reshape((-1, 1))
+                    # make quantization for every user training data samples
+                    dur_kmeans = KMeans(n_clusters=self.q_classes,
+                                        random_state=0).fit(flat_durs)
+                    self.dur_kmeans = dur_kmeans
+                    # Normalization of dur is not necessary anymore with clusters
+                    spk['dur_clusters'] = dur_kmeans
+            parsed_labs = result[2]
+            total_flat_labs += result[3]
+            total_parsed_durs += parsed_durs
+            total_parsed_labs += parsed_labs
+            total_parsed_spks += [sname] * len(parsed_labs)
+            del spk['result']
+        return parsed_labs, total_flat_labs, total_parsed_durs, \
+               total_parsed_labs, total_parsed_spks
 
 
 class TCSTAR_dur(TCSTAR):
@@ -287,76 +361,14 @@ class TCSTAR_dur(TCSTAR):
         # build parser to read labels
         lab_parser = label_parser(ogmios_fmt=self.ogmios_lab)
         self.lab_parser = lab_parser
-        num_parsed = 0
-        # store labs reference with speaker ID
-        self.labs = []
-        total_parsed_labs = []
-        total_flat_labs = []
-        total_parsed_durs = []
-        total_parsed_spks = []
-        # prepare a multi-processing pool to parse labels faster
-        parse_pool = mp.Pool(self.parse_workers)
         beg_t = timeit.default_timer()
-        num_labs_total = sum(len(spk[self.split]) for sname, spk in
-                                 self.speakers.items())
-        if self.max_spk_samples is not None:
-            num_labs_total = self.max_spk_samples * len(self.speakers)
-        print('TCSTAR_dur-{} > Parsing {} labs from {} speakers. '
-              'Num workers: {}...'.format(self.split, 
-                                          num_labs_total,
-                                          len(self.speakers),
-                                          self.parse_workers))
-        for sname, spk in self.speakers.items():
-            async_f = read_speaker_labs
-            if self.max_spk_samples is not None:
-                spk_samples = spk[self.split][:self.max_spk_samples]
-            else:
-                spk_samples = spk[self.split]
-            async_args = (sname, spk_samples, self.lab_dir,
-                          lab_parser, True)
-            spk['result'] = parse_pool.apply_async(async_f, async_args)
-        parse_pool.close()
-        parse_pool.join()
-        for sname, spk in self.speakers.items():
-            result = spk['result'].get()
-            parsed_timestamps = result[1]
-            parsed_durs = tstamps_to_dur(parsed_timestamps)
-            if self.norm_dur:
-                if self.split == 'train' and ('dur_stats' not in spk or \
-                                              self.force_gen):
-                    flat_durs = [fd for dseq in parsed_durs for fd in dseq]
-                    # if they do not exist (or force_gen) and it's train split
-                    dur_min = np.min(flat_durs)
-                    assert dur_min > 0, dur_min
-                    dur_max = np.max(flat_durs)
-                    assert dur_max > 0, dur_max
-                    assert dur_max > dur_min, dur_max
-                    spk['dur_stats'] = {'min':dur_min,
-                                        'max':dur_max}
-                elif self.split != 'train' and 'dur_stats' not in spk:
-                    raise ValueError('Dur stats not available in spk config, '
-                                     'and norm_dur option was specified. Load '
-                                     'train split to solve this issue, or '
-                                     'pre-compute the stats.')
-            if self.q_classes is not None:
-                if self.split == 'train' and ('dur_clusters' not in spk or \
-                                              self.force_gen) and \
-                   self.q_classes is not None:
-                    flat_durs = [fd for dseq in parsed_durs for fd in dseq]
-                    flat_durs = np.array(flat_durs)
-                    flat_durs = flat_durs.reshape((-1, 1))
-                    # make quantization for every user training data samples
-                    dur_kmeans = KMeans(n_clusters=self.q_classes,
-                                        random_state=0).fit(flat_durs)
-                    self.dur_kmeans = dur_kmeans
-                    # Normalization of dur is not necessary anymore with clusters
-                    spk['dur_clusters'] = dur_kmeans
-            parsed_labs = result[2]
-            total_flat_labs += result[3]
-            total_parsed_durs += parsed_durs
-            total_parsed_labs += parsed_labs
-            total_parsed_spks += [sname] * len(parsed_labs)
-            del spk['result']
+        num_parsed = 0
+        parsed_labs, total_flat_labs, \
+        total_parsed_durs, total_parsed_labs, \
+        total_parsed_spks = self.parse_labs(lab_parser, 
+                                            compute_dur_stats=self.norm_dur,
+                                            compute_dur_classes=(self.q_classes is \
+                                                            not None))
         # Build label encoder (codebooks will be made if they don't exist or
         # if they are forced)
         lab_enc = label_encoder(codebooks_path=lab_codebooks_path,
@@ -556,16 +568,24 @@ class TCSTAR_dur(TCSTAR):
 class TCSTAR_aco(TCSTAR):
 
     def __init__(self, spk_cfg_file, split, aco_dir, lab_dir,
-                 lab_codebooks_path, force_gen=False, exclude_train_spks=[],
+                 lab_codebooks_path, force_gen=False,
                  ogmios_lab=True, parse_workers=4, 
+                 max_seq_len=None, batch_size=None,
+                 max_spk_samples=None, 
+                 mulout=False, exclude_train_spks=[],
+                 exclude_eval_spks=[],
                  aco_window_stride=80, aco_window_len=320, 
                  aco_frame_rate=16000):
         super(TCSTAR_aco, self).__init__(spk_cfg_file, split, lab_dir,
-                                         lab_codebooks_path, force_gen,
+                                         lab_codebooks_path, force_gen=force_gen,
                                          ogmios_lab=ogmios_lab,
                                          parse_workers=parse_workers,
                                          max_seq_len=max_seq_len,
-                                         batch_size=batch_size)
+                                         mulout=mulout,
+                                         exclude_train_spks=exclude_train_spks,
+                                         exclude_eval_spks=exclude_eval_spks,
+                                         batch_size=batch_size,
+                                         max_spk_samples=max_spk_samples)
         self.aco_window_stride = aco_window_stride
         self.aco_window_len = aco_window_len
         self.aco_frame_rate = aco_frame_rate
