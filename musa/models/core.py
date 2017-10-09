@@ -20,3 +20,4 @@ class speaker_model(nn.Module):
 
     def load(self, model_file):
         self.load_state_dict(torch.load(model_file))
+
