@@ -2,6 +2,8 @@ import numpy as np
 import pickle
 import os
 import re
+import json
+import pdb
 
 
 class label_encoder(object):
@@ -402,3 +404,77 @@ def tstamps_to_dur(tstamps, flat_input=False):
             #    durs_t.append((end_t - beg_t) / 1e7)
             durs.append(durs_t)
     return durs
+
+def trim_spk_samples(spk_samples, spk_phones, min_count, mulout):
+    """ Trim each spk samples to min_count """
+    # keep track of retained samples per spk
+    spk_counts = {}
+    if mulout:
+        # multiple outputs
+        trim_samples = {}
+        trim_phones = {}
+        assert isinstance(spk_samples, dict), type(spk_samples)
+        for spk_name, spk_sample in spk_samples.items():
+            print('spk_name: ', spk_name)
+            print('spk len: ', len(spk_sample))
+            print('min_count to apply: ', min_count)
+            print('spk_sample type: ', type(spk_sample))
+            for spk_sample_, spk_phone_ in zip(spk_sample,
+                                               spk_phones[spk_name]):
+                if spk_name not in spk_counts:
+                    spk_counts[spk_name] = 0
+                    trim_samples[spk_name] = []
+                    trim_phones[spk_name] = []
+
+                if spk_counts[spk_name] < (min_count - 1):
+                    trim_samples[spk_name].append(spk_sample_)
+                    trim_phones[spk_name].append(spk_phone_)
+                    spk_counts[spk_name] += 1
+
+            #spk_trim_sample, \
+            #spk_trim_phones = trim_spk_samples(spk_sample,
+            #                                   spk_phones[spk_name],
+            #                                   min_count,
+            #                                   False)
+            #assert len(spk_trim_sample) == min_count, len(spk_trim_sample)
+            #assert len(spk_trim_phones) == min_count, len(spk_trim_phones)
+            #trim_samples[spk_name] = spk_trim_sample[:]
+            #trim_phones[spk_name] = spk_trim_phones[:]
+    else:
+        # process one-by-one
+        trim_samples = []
+        trim_phones = []
+        print('spk samples len: ', len(spk_samples))
+        print('spk phones len: ', len(spk_phones))
+        print('trimming to min count: ', min_count)
+        for spk_sample, spk_phone in zip(spk_samples, spk_phones):
+            #pdb.set_trace()
+            spk_id = int(spk_sample[0][0])
+            if spk_id not in spk_counts:
+                spk_counts[spk_id] = 0
+            #print('Spk_counts[{}] = {}'.format(spk_id,
+            #                                   spk_counts[spk_id],
+            #                                   min_count - 1))
+            if spk_counts[spk_id] < (min_count - 1):
+                trim_samples.append(spk_sample)
+                trim_phones.append(spk_phone)
+                spk_counts[spk_id] += 1
+    return trim_samples, trim_phones
+
+def statefulize_data(data, batch_size, seq_len):
+    assert isinstance(data, dict), type(data)
+    st_data = dict(data)
+    for datak, datav in data.items():
+        data_vals = datav['data']
+        np_class = datav['np_class']
+        data_arr = np_class(data_vals)
+        print('np type of {}: {}'.format(datak, type(data_arr)))
+        data_arr = data_arr.reshape((batch_size, -1, data_arr.shape[-1]))
+        print('{}_arr shape: {}'.format(datak, data_arr.shape))
+        data_arr = np.split(data_arr, data_arr.shape[1] // seq_len, axis=1)
+        print('Interleaved {}_arr[0] shape: {}'.format(datak, data_arr[0].shape))
+        data_arr = np.concatenate(data_arr, axis=0)
+        print('Interleaved {}_arr:{}'.format(datak, data_arr.shape))
+        st_data[datak]['st_data'] = data_arr
+    return st_data
+
