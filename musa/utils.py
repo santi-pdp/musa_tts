@@ -30,9 +30,10 @@ def repackage_hidden(h, curr_bsz):
     else:
         return tuple(repackage_hidden(v, curr_bsz).contiguous() for v in h)
 
-def rmse(prediction, groundtruth, spks=None):
+def rmse(prediction, groundtruth, spks=None, idx2spk=None):
     assert prediction.shape == groundtruth.shape
-    D = np.sqrt(np.mean((groundtruth - prediction) ** 2, axis=0))
+    # global
+    D = np.asscalar(np.sqrt(np.mean((groundtruth - prediction) ** 2, axis=0)))
     if spks is not None:
         spk_durs = {}
         for (pred, gtruth, spk) in zip(prediction, groundtruth,
@@ -44,10 +45,72 @@ def rmse(prediction, groundtruth, spks=None):
         for spk in spks:
             diffs = spk_durs[spk]
             avg = np.mean(diffs, axis=0)
-            spk_durs[spk] = np.sqrt(avg)
+            spk_durs[spk] = np.asscalar(np.sqrt(avg))
+        # remake dict if idx2spk available
+        if idx2spk is not None:
+            nspk_durs = {}
+            for spk in spks:
+                nspk_durs[idx2spk[int(spk)]] = spk_durs[spk]
+            return D, nspk_durs
         return D, spk_durs
     else:
         return D
+
+def accuracy(prediction, groundtruth):
+    a = [not x for x in np.logical_xor(prediction, 
+                                       groundtruth)]
+    a = list(map(float, a))
+    return np.sum(a) / len(a)
+
+def fpr(prediction, groundtruth):
+    """ Compute F-measure, Precision and Recall """
+    from sklearn.metrics import precision_score, recall_score, f1_score
+    p = precision_score(groundtruth, prediction)
+    r = recall_score(groundtruth, prediction)
+    f = f1_score(groundtruth, prediction)
+    return f, p, r
+
+def afpr(prediction, groundtruth, spks=None, idx2spk=None):
+    assert prediction.shape == groundtruth.shape
+    #print('afpr prediction shape: ', prediction.shape)
+    if prediction.ndim == 1:
+        prediction = prediction.reshape(-1, 1)
+        groundtruth = groundtruth.reshape(-1, 1)
+    if spks is not None:
+        # recursively call afpr for each speaker
+        spk_uvs = {}
+        spk_res = {}
+        for (pred, gtruth, spk) in zip(prediction, groundtruth,
+                                       spks):
+            if str(spk) not in spk_uvs:
+                spk_uvs[str(spk)] = {'preds':[], 'gtruths':[]}
+            spk_uvs[str(spk)]['preds'].append(pred)
+            spk_uvs[str(spk)]['gtruths'].append(gtruth)
+        spks = (spk_uvs.keys())
+        #print('Eval mcd spks: ', spks)
+        for spk in spks:
+            spk_pred = np.array(spk_uvs[spk]['preds'])
+            spk_gtruth = np.array(spk_uvs[spk]['gtruths'])
+            spk_r = afpr(spk_pred, spk_gtruth)
+            for k, v in spk_r.items():
+                if idx2spk is not None:
+                    spk_res['{}.{}'.format(k, idx2spk[int(spk)])] = v
+                else:
+                    spk_res['{}.{}'.format(k, spk)] = v
+        # compute global too
+        #print('Computing global afpr')
+        total_res = afpr(prediction, groundtruth)
+        spk_res['total'] = {}
+        for k, v in total_res.items():
+            spk_res['{}.total'.format(k)] = v
+            spk_res['total']['{}.total'.format(k)] = v
+        return spk_res
+    else:
+        #print('groundtruth.shape: ', groundtruth.shape)
+        #print('prediction.shape: ', prediction.shape)
+        f, p, r = fpr(prediction, groundtruth) 
+        return {'A':accuracy(prediction, groundtruth),
+                'F':f, 'P':p, 'R':r}
 
 def mcd(prediction, groundtruth, spks=None, idx2spk=None):
     """ Mean Cepstral Distortion 
@@ -65,7 +128,7 @@ def mcd(prediction, groundtruth, spks=None, idx2spk=None):
             spk_ccs[str(spk)]['preds'].append(pred)
             spk_ccs[str(spk)]['gtruths'].append(gtruth)
         spks = (spk_ccs.keys())
-        print('Eval mcd spks: ', spks)
+        #print('Eval mcd spks: ', spks)
         for spk in spks:
             spk_pred = np.array(spk_ccs[spk]['preds'])
             spk_gtruth = np.array(spk_ccs[spk]['gtruths'])

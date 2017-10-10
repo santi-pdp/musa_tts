@@ -4,6 +4,7 @@ from musa.models import *
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from musa.core import *
+import random
 import json
 import os
 
@@ -295,6 +296,7 @@ if __name__ == '__main__':
         os.makedirs(opts.save_path)
     torch.manual_seed(opts.seed)
     np.random.seed(opts.seed)
+    random.seed(opts.seed)
     if opts.cuda:
         torch.cuda.manual_seed(opts.seed)
     main(opts)

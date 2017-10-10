@@ -434,22 +434,24 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
         slen_b = Variable(slen_b, volatile=True)
         # get curr batch size
         curr_bsz = spk_b.size(1)
-        if b_idx == 0:
-            # init hidden/output state of aco model
-            hid_state = model.init_hidden_state(curr_bsz, volatile=True)
-            out_state = model.init_output_state(curr_bsz, volatile=True)
-        if b_idx > 0:
-            # copy last states
-            hid_state = repackage_hidden(hid_state, curr_bsz)
-            out_state = repackage_hidden(out_state, curr_bsz)
+#        if b_idx == 0:
+#            # init hidden/output state of aco model
+#            hid_state = model.init_hidden_state(curr_bsz, volatile=True)
+#            out_state = model.init_output_state(curr_bsz, volatile=True)
+#        if b_idx > 0:
+#            # copy last states
+#            hid_state = repackage_hidden(hid_state, curr_bsz)
+#            out_state = repackage_hidden(out_state, curr_bsz)
         if cuda:
             spk_b = var_to_cuda(spk_b)
             lab_b = var_to_cuda(lab_b)
             aco_b = var_to_cuda(aco_b)
             slen_b = var_to_cuda(slen_b)
-            hid_state = var_to_cuda(hid_state)
-            out_state = var_to_cuda(out_state)
+#            hid_state = var_to_cuda(hid_state)
+#            out_state = var_to_cuda(out_state)
         # forward through model
+        hid_state = None
+        out_state = None
         y, hid_state, out_state = model(lab_b, hid_state, 
                                         out_state, 
                                         speaker_idx=spk_b)
@@ -487,15 +489,55 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
 #    sil_mask_int = list(map(int, sil_mask))
 #    np.savetxt('/tmp/sil_mask.txt', sil_mask_int, fmt="%d")
     aco_mcd = mcd(preds[:,:40], gtruths[:,:40], spks, idx2spk)
-    nosil_aco_mcd = mcd(preds[:,:40] * sil_mask, gtruths[:,:40] * sil_mask,
+    aco_afpr = afpr(np.round(preds[:,-1]), gtruths[:,-1], spks, 
+                    idx2spk)
+    aco_f0_rmse, aco_f0_spk = rmse(np.exp(preds[:, -2]), 
+                                   np.exp(gtruths[:, -2]),
+                                   spks, idx2spk)
+    #print('Evaluated aco F0 mRMSE [Hz]: {:.2f}'.format(aco_f0_rmse))
+    masked_f0_preds = np.exp(preds[:, -2]).reshape(-1, 1) * sil_mask
+    masked_f0_gtruths = np.exp(gtruths[:, -2]).reshape(-1, 1) * sil_mask
+    nosil_aco_f0_rmse, \
+    nosil_aco_f0_spk = rmse(masked_f0_preds,
+                            masked_f0_gtruths,
+                            spks, idx2spk)
+    masked_cc_preds = preds[:, :40] * sil_mask
+    masked_cc_gtruths = gtruths[:, :40] * sil_mask
+    nosil_aco_mcd = mcd(masked_cc_preds, masked_cc_gtruths,
                         spks, idx2spk)
-    print('Evaluated aco MCD [dB]: {:.3f}'.format(aco_mcd['total']))
+    masked_uv_preds = np.round(preds[:, -1]).reshape(-1, 1) * sil_mask
+    masked_uv_gtruths = gtruths[:, -1].reshape(-1, 1) * sil_mask
+    nosil_aco_afpr = afpr(masked_uv_preds, masked_uv_gtruths,
+                          spks, idx2spk)
+
+    #print('Evaluated aco MCD [dB]: {:.3f}'.format(aco_mcd['total']))
+    print('========= F0 RMSE =========')
+    print('Evaluated aco W/O sil phones ({}) F0 mRMSE [Hz]:'
+          '{:.2f}'.format(sil_id, nosil_aco_f0_rmse))
+    print('Evaluated aco F0 mRMSE of spks: '
+          '{}'.format(json.dumps(nosil_aco_f0_spk,
+                                 indent=2)))
+    print('========= MCD =========')
     print('Evaluated aco W/O sil phones ({}) MCD [dB]:'
           '{:.3f}'.format(sil_id, nosil_aco_mcd['total']))
-    print('Evaluated w/ sil MCD of spks: {}'.format(json.dumps(aco_mcd,
-                                                               indent=2)))
-    print('Evaluated w/o sil MCD of spks: {}'.format(json.dumps(nosil_aco_mcd,
+    #print('Evaluated w/ sil MCD of spks: {}'.format(json.dumps(aco_mcd,
+    #                                                           indent=2)))
+    print('Evaluated W/O sil MCD of spks: {}'.format(json.dumps(nosil_aco_mcd,
                                                                 indent=2)))
+    print('========= Acc =========')
+    #print('Evaluated aco AFPR [norm]: '.format(aco_afpr['A.total']))
+    print('Evaluated aco W/O sil phones ({}) Acc [norm]:'
+          ''.format(sil_id, nosil_aco_afpr['A.total']))
+    print('=' * 30)
+    #print('Evaluated w/ sil MCD of spks: {}'.format(json.dumps(aco_mcd,
+    #                                                           indent=2)))
+    #print('Evaluated w/o sil MCD of spks: {}'.format(json.dumps(nosil_aco_mcd,
+    #                                                            indent=2)))
+    #print('Evaluated w/ sil AFPR of spks: {}'.format(json.dumps(aco_afpr,
+    #                                                            indent=2)))
+    #print('Evaluated w/o sil AFPR of spks: '
+    #      '{}'.format(json.dumps(nosil_aco_afpr,
+    #                             indent=2)))
     # transform nosil_aco_mcd keys
     new_keys_d = {}
     for k in nosil_aco_mcd.keys():
@@ -504,8 +546,18 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
             continue
         # transform each key into the desired loss filename 
         new_keys_d['mo-{}_va_mcd'.format(k)] = nosil_aco_mcd[k]
+    for k in nosil_aco_afpr.keys():
+        if k == 'total':
+            continue
+        new_keys_d['mo-{}_va_afpr'.format(k)] = nosil_aco_afpr[k]
+    for k in nosil_aco_f0_spk.keys():
+        new_keys_d['mo-{}_va_f0rmse'.format(k)] = nosil_aco_f0_spk[k]
     new_keys_d.update({'total_aco_mcd':aco_mcd['total'],
-                       'total_nosil_aco_mcd':nosil_aco_mcd['total']})
+                       'total_nosil_aco_mcd':nosil_aco_mcd['total'],
+                       'total_aco_afpr':aco_afpr['total'],
+                       'total_nosil_aco_afpr':nosil_aco_afpr['total'],
+                       'total_aco_f0rmse':aco_f0_rmse,
+                       'total_nosil_aco_f0rmse':nosil_aco_f0_rmse})
     return new_keys_d
 
 def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
