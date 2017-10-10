@@ -225,10 +225,11 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
                 epoch_losses['tr_loss'].append(loss.data[0])
                 if nosil_aco_mcd:
                     epoch_losses['tr_mcd'].append(nosil_aco_mcd)
-        print(log_mesg)
-end_log = '-- Finished epoch {:4d}, mean losses:'.format(epoch_idx)
-for k, val in epoch_losses.items():
-        end_log += ' ({} : {:.5f})'.format(k, np.mean(val))
+            print(log_mesg)
+    end_log = '-- Finished epoch {:4d}, mean losses:'.format(epoch_idx)
+    if isinstance(epoch_losses, dict):
+        for k, val in epoch_losses.items():
+            end_log += ' ({} : {:.5f})'.format(k, np.mean(val))
     end_log += ' --'
     print(end_log)
     return epoch_losses

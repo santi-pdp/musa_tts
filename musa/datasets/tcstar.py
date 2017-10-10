@@ -963,12 +963,13 @@ class TCSTAR_aco(TCSTAR):
                                                  counts_min,
                                                  self.mulout)
             print('len self.vec_sample after trim: ', len(self.vec_sample))
-            # go over all speaker ids and trim to max amount of samples
-            for spkname, phsample in self.phone_sample.items():
-                print('-' * 60)
-                print('spk {} phsample len: {}'.format(spkname, len(phsample)))
-                #for phs in phsample:
-                #    print('{}|{}'.format(spkname, phs[2]), end=' ')
+            if self.mulout:
+                # go over all speaker ids and trim to max amount of samples
+                for spkname, phsample in self.phone_sample.items():
+                    print('-' * 60)
+                    print('spk {} phsample len: {}'.format(spkname, len(phsample)))
+                    #for phs in phsample:
+                    #    print('{}|{}'.format(spkname, phs[2]), end=' ')
         print('-' * 50)
         end_t = timeit.default_timer()
         print('TCSTAR_aco-{} > Vectorized dur samples in {:.4f} '
