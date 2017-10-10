@@ -908,22 +908,6 @@ class TCSTAR_aco(TCSTAR):
                                                    total_batches]
             all_phone_seq[spkname] = tri_phone_seq
             print('total stateful batches: ', total_batches)
-            # ------------------------------------------------------
-            # TODO: Delete old padding?
-            # pad large sequences to operate with numpy arrays
-            #pad_len = total_batches * (self.batch_size * self.max_seq_len) - \
-            #          all_seq_len
-            #print('pad_len: ', pad_len)
-            #all_code_seq += [[0.] + [0.] * self.ling_feats_dim + [0] * 2 + \
-            #                 self.aco_feats_dim * [0]] * \
-            #                 pad_len
-            #all_phone_seq += [['<PAD>'] * 5] * pad_len
-            # ------------------------------------------------------
-
-            # --------------- PHONES MAKE SENSE HERE
-            #for ph_ex in all_phone_seq[spkname]:
-            #    print(ph_ex[2], end=' ')
-            # ---------------------------------------
 
             # Create dict of data to statefulize codes and phones data
             to_st_data = {'co':{'data':all_code_seq[spkname], 
@@ -934,13 +918,7 @@ class TCSTAR_aco(TCSTAR):
                                        self.max_seq_len)
             co_arr = st_data['co']['st_data']
             ph_arr = st_data['ph']['st_data']
-            #print('spk: ', spkname)
-            #print('ph_arr shape: ', ph_arr.shape)
-            #for n in range(0, 10 * self.batch_size, self.batch_size):
-            #    print('ph_arr[{}] = '.format(n), end='')
-            #    for t_ in range(ph_arr.shape[1]):
-            #        print(ph_arr[n, t_][2], end=' ')
-            #    print('\n' + '-' * 50)
+
             # re-format data per speaker excluding padding symbols now
             for phone_sample, vec_sample in zip(ph_arr, co_arr):
                 vec_seq = []
