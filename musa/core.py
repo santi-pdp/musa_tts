@@ -112,28 +112,30 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
         slen_b = Variable(slen_b)
         # get curr batch size
         curr_bsz = spk_b.size(1)
-        if b_idx == 0:
+        # TODO: not stateful atm
+        #if b_idx == 0:
             #print('Initializing recurrent states, e: {}, b: '
             #      '{}'.format(epoch_idx, b_idx))
             # init hidden/output state of aco model
-            hid_state = model.init_hidden_state(curr_bsz)
-            out_state = model.init_output_state(curr_bsz)
-        if b_idx > 0:
+        #    hid_state = model.init_hidden_state(curr_bsz)
+        #    out_state = model.init_output_state(curr_bsz)
+        #if b_idx > 0:
             #print('Copying recurrent states, e: {}, b: '
             #      '{}'.format(epoch_idx, b_idx))
             # copy last states
-            hid_state = repackage_hidden(hid_state, curr_bsz)
-            out_state = repackage_hidden(out_state, curr_bsz)
+        #    hid_state = repackage_hidden(hid_state, curr_bsz)
+        #    out_state = repackage_hidden(out_state, curr_bsz)
         if cuda:
             spk_b = var_to_cuda(spk_b)
             lab_b = var_to_cuda(lab_b)
             aco_b = var_to_cuda(aco_b)
             slen_b = var_to_cuda(slen_b)
-            hid_state = var_to_cuda(hid_state)
-            out_state = var_to_cuda(out_state)
+            #hid_state = var_to_cuda(hid_state)
+            #out_state = var_to_cuda(out_state)
         #print(list(out_state.keys()))
         #print('lab_b size: ', lab_b.size())
         # forward through model
+        hid_state = out_state = None
         y, hid_state, out_state = model(lab_b, hid_state, out_state, speaker_idx=spk_b)
         if isinstance(y, dict):
             # we have a MO model, pick the right spk
@@ -434,6 +436,7 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
         slen_b = Variable(slen_b, volatile=True)
         # get curr batch size
         curr_bsz = spk_b.size(1)
+        # TODO: atm it is NOT stateful
 #        if b_idx == 0:
 #            # init hidden/output state of aco model
 #            hid_state = model.init_hidden_state(curr_bsz, volatile=True)
@@ -481,13 +484,6 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     assert spk2acostats is not None
     preds, gtruths = denorm_aco_preds_gtruth(preds, gtruths,
                                              spks, spk2acostats)
-#    with open('/tmp/all_phones.txt', 'w') as out_f:
-#        for all_ph in all_phones:
-#            out_f.write(all_ph + '\n')
-#    spks = list(map(int, spks))
-#    np.savetxt('/tmp/spks.txt', spks, fmt="%d")
-#    sil_mask_int = list(map(int, sil_mask))
-#    np.savetxt('/tmp/sil_mask.txt', sil_mask_int, fmt="%d")
     aco_mcd = mcd(preds[:,:40], gtruths[:,:40], spks, idx2spk)
     aco_afpr = afpr(np.round(preds[:,-1]), gtruths[:,-1], spks, 
                     idx2spk)
