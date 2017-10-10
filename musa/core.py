@@ -95,6 +95,9 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
                               '{}'.format(tr_opts.keys())
     epoch_losses = {}
     num_batches = len(dloader)
+    # keep stateful references by spk idx
+    spk2hid_states = {}
+    spk2out_states = {}
     if mulout:
         # keep track of the losses per round to make a proper log
         # when MO is running 
@@ -107,41 +110,41 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
         curr_ph_b = [[ph[2] for ph in ph_s] for ph_s in ph_b]
         # convert all into variables and transpose (we want time-major)
         spk_b = Variable(spk_b).transpose(0,1).contiguous()
+        spk_name = idx2spk[spk_b.data[0,0]]
         lab_b = Variable(lab_b).transpose(0,1).contiguous()
         aco_b = Variable(aco_b).transpose(0,1).contiguous()
         slen_b = Variable(slen_b)
         # get curr batch size
         curr_bsz = spk_b.size(1)
-        # TODO: not stateful atm
-        #if b_idx == 0:
-            #print('Initializing recurrent states, e: {}, b: '
-            #      '{}'.format(epoch_idx, b_idx))
-            # init hidden/output state of aco model
-        #    hid_state = model.init_hidden_state(curr_bsz)
-        #    out_state = model.init_output_state(curr_bsz)
-        #if b_idx > 0:
-            #print('Copying recurrent states, e: {}, b: '
-            #      '{}'.format(epoch_idx, b_idx))
-            # copy last states
-        #    hid_state = repackage_hidden(hid_state, curr_bsz)
-        #    out_state = repackage_hidden(out_state, curr_bsz)
+        if spk_name not in spk2hid_states:
+            hid_state = model.init_hidden_state(curr_bsz)
+            out_state = model.init_output_state(curr_bsz)
+            #print('Initializing states of spk ', spk_name)
+        else:
+            #print('Fetching mulout states of spk ', spk_name)
+            # select last spks state in the MO dict
+            hid_state = spk2hid_states[spk_name]
+            out_state = spk2out_states[spk_name]
+            hid_state = repackage_hidden(hid_state, curr_bsz)
+            out_state = repackage_hidden(out_state, curr_bsz)
         if cuda:
             spk_b = var_to_cuda(spk_b)
             lab_b = var_to_cuda(lab_b)
             aco_b = var_to_cuda(aco_b)
             slen_b = var_to_cuda(slen_b)
-            #hid_state = var_to_cuda(hid_state)
-            #out_state = var_to_cuda(out_state)
+            hid_state = var_to_cuda(hid_state)
+            out_state = var_to_cuda(out_state)
         #print(list(out_state.keys()))
         #print('lab_b size: ', lab_b.size())
         # forward through model
-        hid_state = out_state = None
         y, hid_state, out_state = model(lab_b, hid_state, out_state, speaker_idx=spk_b)
         if isinstance(y, dict):
             # we have a MO model, pick the right spk
-            spk_name = idx2spk[spk_b.cpu().data[0,0]]
-            # print('Extracting y prediction for MO spk ', spk_name)
             y = y[spk_name]
+            #print('Saving states of spk ', spk_name)
+            # save its states
+            spk2hid_states[spk_name] = hid_state
+            spk2out_states[spk_name] = out_state
         #print('y size: ', y.size())
         #print('aco_b size: ', aco_b.size())
         y = y.squeeze(-1)
@@ -222,9 +225,9 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
                 epoch_losses['tr_loss'].append(loss.data[0])
                 if nosil_aco_mcd:
                     epoch_losses['tr_mcd'].append(nosil_aco_mcd)
-            print(log_mesg)
-    end_log = '-- Finished epoch {:4d}, mean losses:'.format(epoch_idx)
-    for k, val in epoch_losses.items():
+        print(log_mesg)
+end_log = '-- Finished epoch {:4d}, mean losses:'.format(epoch_idx)
+for k, val in epoch_losses.items():
         end_log += ' ({} : {:.5f})'.format(k, np.mean(val))
     end_log += ' --'
     print(end_log)
@@ -412,6 +415,9 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     # make the silence mask
     sil_mask = None
     all_phones = []
+    # keep stateful references by spk idx
+    spk2hid_states = {}
+    spk2out_states = {}
     for b_idx, batch in enumerate(dloader):
         # decompose the batch into the sub-batches
         spk_b, lab_b, aco_b, slen_b, ph_b = batch
@@ -431,30 +437,32 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
         #print('len(curr_ph_b[0]): ', len(curr_ph_b[0]))
         # convert all into variables and transpose (we want time-major)
         spk_b = Variable(spk_b, volatile=True).transpose(0,1).contiguous()
+        spk_name = idx2spk[spk_b.cpu().data[0,0]]
         lab_b = Variable(lab_b, volatile=True).transpose(0,1).contiguous()
         aco_b = Variable(aco_b, volatile=True).transpose(0,1).contiguous()
         slen_b = Variable(slen_b, volatile=True)
         # get curr batch size
         curr_bsz = spk_b.size(1)
         # TODO: atm it is NOT stateful
-#        if b_idx == 0:
-#            # init hidden/output state of aco model
-#            hid_state = model.init_hidden_state(curr_bsz, volatile=True)
-#            out_state = model.init_output_state(curr_bsz, volatile=True)
-#        if b_idx > 0:
-#            # copy last states
-#            hid_state = repackage_hidden(hid_state, curr_bsz)
-#            out_state = repackage_hidden(out_state, curr_bsz)
+        if spk_name not in spk2hid_states:
+            hid_state = model.init_hidden_state(curr_bsz)
+            out_state = model.init_output_state(curr_bsz)
+            #print('Initializing states of spk ', spk_name)
+        else:
+            #print('Fetching mulout states of spk ', spk_name)
+            # select last spks state in the MO dict
+            hid_state = spk2hid_states[spk_name]
+            out_state = spk2out_states[spk_name]
+            hid_state = repackage_hidden(hid_state, curr_bsz)
+            out_state = repackage_hidden(out_state, curr_bsz)
         if cuda:
             spk_b = var_to_cuda(spk_b)
             lab_b = var_to_cuda(lab_b)
             aco_b = var_to_cuda(aco_b)
             slen_b = var_to_cuda(slen_b)
-#            hid_state = var_to_cuda(hid_state)
-#            out_state = var_to_cuda(out_state)
+            hid_state = var_to_cuda(hid_state)
+            out_state = var_to_cuda(out_state)
         # forward through model
-        hid_state = None
-        out_state = None
         y, hid_state, out_state = model(lab_b, hid_state, 
                                         out_state, 
                                         speaker_idx=spk_b)
@@ -464,9 +472,11 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
         assert all_comp
         if isinstance(y, dict):
             # we have a MO model, pick the right spk
-            spk_name = idx2spk[spk_b.cpu().data[0,0]]
             # print('Extracting y prediction for MO spk ', spk_name)
             y = y[spk_name]
+            # save its states
+            spk2hid_states[spk_name] = hid_state
+            spk2out_states[spk_name] = out_state
         #print('y size: ', y.size())
         #print('aco_b size: ', aco_b.size())
         #print('len(curr_ph_b)= ', len(curr_ph_b))

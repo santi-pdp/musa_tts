@@ -598,6 +598,7 @@ class TCSTAR_dur(TCSTAR):
                     self.phone_sample.append(phone_seq)
             pickle.dump(all_durs, open('/tmp/durs.pickle', 'wb'))
         else:
+            raise NotImplementedError('Review stateful dur dataset')
             print('-' * 50)
             print('Encoding dur samples with max_seq_len {} and batch_size '
                   '{}'.format(self.max_seq_len, self.batch_size))
