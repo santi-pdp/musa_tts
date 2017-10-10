@@ -395,7 +395,7 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     if 'idx2spk' in va_opts:
         idx2spk = va_opts.pop('idx2spk')
     if 'mulout' in va_opts:
-        print('Multi-Output dur evaluation')
+        print('Multi-Output aco evaluation')
         mulout = va_opts.pop('mulout')
         if idx2spk is None:
             raise ValueError('Specify a idx2spk in eval opts '
@@ -409,6 +409,7 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     spks = None
     # make the silence mask
     sil_mask = None
+    all_phones = []
     for b_idx, batch in enumerate(dloader):
         # decompose the batch into the sub-batches
         spk_b, lab_b, aco_b, slen_b, ph_b = batch
@@ -416,9 +417,16 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
         #print('ph_b: ', ph_b)
         # build batch of curr_ph to filter out results without sil phones
         # size of curr_ph_b [bsize, seqlen]
-        curr_ph_b = [[ph[2] for ph in ph_s] for ph_s in ph_b]
-        print('len(curr_ph_b): ', len(curr_ph_b))
-        print('len(curr_ph_b[0]): ', len(curr_ph_b[0]))
+        curr_ph_b = []
+        for ph_s in ph_b:
+            phone_seq = []
+            for ph in ph_s:
+                phone_seq.append(ph[2])
+                all_phones.append(ph[2])
+            curr_ph_b.append(phone_seq)
+            #curr_ph_b = [[ph[2] for ph in ph_s] for ph_s in ph_b]
+        #print('len(curr_ph_b): ', len(curr_ph_b))
+        #print('len(curr_ph_b[0]): ', len(curr_ph_b[0]))
         # convert all into variables and transpose (we want time-major)
         spk_b = Variable(spk_b, volatile=True).transpose(0,1).contiguous()
         lab_b = Variable(lab_b, volatile=True).transpose(0,1).contiguous()
@@ -427,14 +435,10 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
         # get curr batch size
         curr_bsz = spk_b.size(1)
         if b_idx == 0:
-            #print('Initializing recurrent states, e: {}, b: '
-            #      '{}'.format(epoch_idx, b_idx))
             # init hidden/output state of aco model
             hid_state = model.init_hidden_state(curr_bsz, volatile=True)
             out_state = model.init_output_state(curr_bsz, volatile=True)
         if b_idx > 0:
-            #print('Copying recurrent states, e: {}, b: '
-            #      '{}'.format(epoch_idx, b_idx))
             # copy last states
             hid_state = repackage_hidden(hid_state, curr_bsz)
             out_state = repackage_hidden(out_state, curr_bsz)
@@ -450,8 +454,8 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
                                         out_state, 
                                         speaker_idx=spk_b)
         spk_npy = spk_b.cpu().data.numpy()
-        print(spk_npy)
-        all_comp = np.all(spk_npy == spk_npy[0, 0])
+        #print(spk_npy)
+        all_comp = np.all(spk_npy == spk_npy[0, 0]), spk_npy
         assert all_comp
         if isinstance(y, dict):
             # we have a MO model, pick the right spk
@@ -460,7 +464,7 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
             y = y[spk_name]
         #print('y size: ', y.size())
         #print('aco_b size: ', aco_b.size())
-        y = y.squeeze(-1)
+        #print('len(curr_ph_b)= ', len(curr_ph_b))
         preds, gtruths, \
         spks, sil_mask = predict_masked_mcd(y, aco_b, slen_b, 
                                             spk_b, curr_ph_b,
@@ -475,19 +479,34 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     assert spk2acostats is not None
     preds, gtruths = denorm_aco_preds_gtruth(preds, gtruths,
                                              spks, spk2acostats)
-    aco_mcd = mcd(preds[:,:40], gtruths[:,:40], spks)
+#    with open('/tmp/all_phones.txt', 'w') as out_f:
+#        for all_ph in all_phones:
+#            out_f.write(all_ph + '\n')
+#    spks = list(map(int, spks))
+#    np.savetxt('/tmp/spks.txt', spks, fmt="%d")
+#    sil_mask_int = list(map(int, sil_mask))
+#    np.savetxt('/tmp/sil_mask.txt', sil_mask_int, fmt="%d")
+    aco_mcd = mcd(preds[:,:40], gtruths[:,:40], spks, idx2spk)
     nosil_aco_mcd = mcd(preds[:,:40] * sil_mask, gtruths[:,:40] * sil_mask,
                         spks, idx2spk)
     print('Evaluated aco MCD [dB]: {:.3f}'.format(aco_mcd['total']))
-    print('Evaluated aco w/o sil phones MCD [dB]:'
-          '{:.3f}'.format(nosil_aco_mcd['total']))
-    print('Evaluated sil MCD of spks: {}'.format(json.dumps(aco_mcd,
-                                                            indent=2)))
-    print('Evaluated nosil MCD of spks: {}'.format(json.dumps(nosil_aco_mcd,
-                                                              indent=2)))
-    nosil_aco_mcd.update({'total_aco_mcd':aco_mcd['total'],
-                          'total_nosil_aco_mcd':nosil_aco_mcd['total']})
-    return nosil_aco_mcd
+    print('Evaluated aco W/O sil phones ({}) MCD [dB]:'
+          '{:.3f}'.format(sil_id, nosil_aco_mcd['total']))
+    print('Evaluated w/ sil MCD of spks: {}'.format(json.dumps(aco_mcd,
+                                                               indent=2)))
+    print('Evaluated w/o sil MCD of spks: {}'.format(json.dumps(nosil_aco_mcd,
+                                                                indent=2)))
+    # transform nosil_aco_mcd keys
+    new_keys_d = {}
+    for k in nosil_aco_mcd.keys():
+        if k == 'total':
+            # skip this key
+            continue
+        # transform each key into the desired loss filename 
+        new_keys_d['mo-{}_va_mcd'.format(k)] = nosil_aco_mcd[k]
+    new_keys_d.update({'total_aco_mcd':aco_mcd['total'],
+                       'total_nosil_aco_mcd':nosil_aco_mcd['total']})
+    return new_keys_d
 
 def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
                    stats=None, va_opts={}):

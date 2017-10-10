@@ -61,13 +61,14 @@ def mcd(prediction, groundtruth, spks=None, idx2spk=None):
         for (pred, gtruth, spk) in zip(prediction, groundtruth,
                                        spks):
             if str(spk) not in spk_ccs:
-                spk_ccs[str(spk)] = []
-            spk_ccs[str(spk)].append((pred, gtruth))
+                spk_ccs[str(spk)] = {'preds':[], 'gtruths':[]}
+            spk_ccs[str(spk)]['preds'].append(pred)
+            spk_ccs[str(spk)]['gtruths'].append(gtruth)
         spks = (spk_ccs.keys())
         print('Eval mcd spks: ', spks)
         for spk in spks:
-            spk_pred = np.array(spk_ccs[spk][0])
-            spk_gtruth = np.array(spk_ccs[spk][1])
+            spk_pred = np.array(spk_ccs[spk]['preds'])
+            spk_gtruth = np.array(spk_ccs[spk]['gtruths'])
             if idx2spk is not None:
                 spk_res[idx2spk[int(spk)]] = mcd(spk_pred, spk_gtruth)
             else:
@@ -112,12 +113,14 @@ def predict_masked_mcd(y, aco_b, slen_b, spk_b, curr_ph_b,
         curr_ph_seq = curr_ph_b[ii]
         # create seq_mask
         curr_ph_seq_mask = np.zeros((slen_i,))
+        #print('curr_ph_seq: ', curr_ph_seq)
         for t_ in range(slen_i):
             curr_ph = curr_ph_seq[t_]
             if curr_ph != sil_id:
                 curr_ph_seq_mask[t_] = 1.
             else:
                 curr_ph_seq_mask[t_] = 0.
+        #print('resulting mask: ', curr_ph_seq_mask)
         if preds is None:
             #print('Trimming seqlen {}/{}'.format(slen_i, y_i.shape[0]))
             preds = np.array(y_i[:slen_i], dtype=np.float32)
