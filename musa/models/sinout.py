@@ -38,6 +38,7 @@ class acoustic_rnn(speaker_model):
             self.speakers = None
             self.mulout = False
         else:
+            print('Acoustically modeling speakers: ', self.speakers)
             self.speakers = speakers
             self.mulout = mulout
         self.mulout = mulout

@@ -66,6 +66,11 @@ def main(opts):
             dur_outputs = opts.dur_q_classes
         else:
             dur_outputs = 1
+        if opts.dur_mulout:
+            # select only available speakers to load, not all
+            model_spks = list(dset.speakers.keys())
+        else:
+            model_spks = list(dset.all_speakers.keys())
         # build a duration model ready to train
         dur_model = sinout_duration(num_inputs=dset.ling_feats_dim,
                                     num_outputs=dur_outputs,
@@ -74,7 +79,7 @@ def main(opts):
                                     rnn_layers=opts.dur_rnn_layers,
                                     sigmoid_out=opts.sigmoid_dur,
                                     dropout=opts.dur_dout,
-                                    speakers=list(dset.all_speakers.keys()),
+                                    speakers=model_spks,
                                     mulout=opts.dur_mulout,
                                     cuda=opts.cuda)
         adam = optim.Adam(dur_model.parameters(), lr=opts.dur_lr)
@@ -134,6 +139,7 @@ def main(opts):
                           mulout=opts.aco_mulout,
                           q_classes=opts.aco_q_classes,
                           trim_to_min=True,
+                          forced_trim=opts.aco_train_forced_trim,
                           norm_aco=True,
                           exclude_train_spks=opts.exclude_train_spks)
         # can be dur norm or kmeans data
@@ -162,6 +168,7 @@ def main(opts):
                               mulout=opts.aco_mulout,
                               q_classes=opts.aco_q_classes,
                               trim_to_min=True,
+                              forced_trim=opts.aco_valid_forced_trim,
                               norm_aco=True,
                               exclude_eval_spks=opts.exclude_eval_spks)
         if opts.aco_mulout:
@@ -173,6 +180,11 @@ def main(opts):
                                  num_workers=opts.loader_workers, 
                                  sampler=va_sampler,
                                  collate_fn=varlen_aco_collate)
+        if opts.aco_mulout:
+            # select only available speakers to load, not all
+            model_spks = list(dset.speakers.keys())
+        else:
+            model_spks = list(dset.all_speakers.keys())
         # TODO: hardcoded atm
         aco_outputs = 43
         # build an acoustic model ready to train
@@ -183,7 +195,7 @@ def main(opts):
                                  rnn_layers=opts.aco_rnn_layers,
                                  sigmoid_out=True,
                                  dropout=opts.aco_dout,
-                                 speakers=list(dset.all_speakers.keys()),
+                                 speakers=model_spks,
                                  mulout=opts.aco_mulout,
                                  cuda=opts.cuda)
         adam = optim.Adam(aco_model.parameters(), lr=opts.aco_lr)
@@ -274,6 +286,8 @@ if __name__ == '__main__':
     parser.add_argument('--dur_dout', type=float, default=0.5)
     parser.add_argument('--aco_dout', type=float, default=0.5)
     parser.add_argument('--batch_size', type=int, default=50)
+    parser.add_argument('--aco_train_forced_trim', type=int, default=None)
+    parser.add_argument('--aco_valid_forced_trim', type=int, default=None)
     parser.add_argument('--epoch', type=int, default=50)
     parser.add_argument('--log_freq', type=int, default=25)
     parser.add_argument('--patience', type=int, default=5)

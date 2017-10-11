@@ -288,6 +288,7 @@ class TCSTAR(Dataset):
                  mulout=False, 
                  q_classes=None,
                  trim_to_min=False,
+                 forced_trim=None,
                  exclude_train_spks=[],
                  exclude_eval_spks=[]):
         """
@@ -300,8 +301,11 @@ class TCSTAR(Dataset):
                     arranged in batches
             trim_to_min: trim all speakers to same num_samples if
                          maxlen is applied (specially for MO).
+            forced_trim: max num of samples per speaker forced (this
+                         has priority over trim_to_min counts)
         """
         self.trim_to_min = trim_to_min
+        self.forced_trim = forced_trim
         if max_seq_len is not None:
             if batch_size is None:
                 raise ValueError('Please specify a batch size in '
@@ -496,6 +500,7 @@ class TCSTAR_dur(TCSTAR):
                  mulout=False, 
                  q_classes=None,
                  trim_to_min=False,
+                 forced_trim=None,
                  exclude_train_spks=[],
                  exclude_eval_spks=[],
                  norm_dur=True):
@@ -514,6 +519,7 @@ class TCSTAR_dur(TCSTAR):
                                          mulout=mulout,
                                          q_classes=q_classes,
                                          trim_to_min=trim_to_min,
+                                         forced_trim=forced_trim,
                                          exclude_train_spks=exclude_train_spks,
                                          exclude_eval_spks=exclude_eval_spks,
                                          batch_size=batch_size,
@@ -689,11 +695,15 @@ class TCSTAR_dur(TCSTAR):
                         if spk_name not in counts:
                             counts[spk_name] = 0
                         counts[spk_name] += 1
-            if self.trim_to_min:
-                for spk_name, cnt in counts.items():
-                    if counts[spk_name] < counts_min:
-                        counts_min = counts[spk_name]
-                        counts_spk = spk_name
+            if self.trim_to_min or self.forced_trim is not None:
+                if self.forced_trim is not None:
+                    counts_min = self.forced_trim + 1
+                    counts_spk = 'Forced Trim'
+                else:
+                    for spk_name, cnt in counts.items():
+                        if counts[spk_name] < counts_min:
+                            counts_min = counts[spk_name]
+                            counts_spk = spk_name
                 print('-- Trimming speaker samples --')
                 print('counts_min: ', counts_min)
                 print('counts_spk: ', counts_spk)
@@ -783,6 +793,7 @@ class TCSTAR_aco(TCSTAR):
                  exclude_eval_spks=[],
                  q_classes=None,
                  trim_to_min=False,
+                 forced_trim=None,
                  norm_aco=True,
                  aco_window_stride=80, aco_window_len=320, 
                  aco_frame_rate=16000):
@@ -799,6 +810,7 @@ class TCSTAR_aco(TCSTAR):
                                          mulout=mulout,
                                          q_classes=q_classes,
                                          trim_to_min=trim_to_min,
+                                         forced_trim=forced_trim,
                                          exclude_train_spks=exclude_train_spks,
                                          exclude_eval_spks=exclude_eval_spks,
                                          batch_size=batch_size,
@@ -982,11 +994,15 @@ class TCSTAR_aco(TCSTAR):
                     if spk_name not in counts:
                         counts[spk_name] = 0
                     counts[spk_name] += 1
-        if self.trim_to_min:
-            for spk_name, cnt in counts.items():
-                if counts[spk_name] < counts_min:
-                    counts_min = counts[spk_name]
-                    counts_spk = spk_name
+        if self.trim_to_min or self.forced_trim is not None:
+            if self.forced_trim is not None:
+                counts_min = self.forced_trim + 1
+                counts_spk = 'Forced Trim'
+            else:
+                for spk_name, cnt in counts.items():
+                    if counts[spk_name] < counts_min:
+                        counts_min = counts[spk_name]
+                        counts_spk = spk_name
             print('-- Trimming speaker samples --')
             print('counts_min: ', counts_min)
             print('counts_spk: ', counts_spk)
