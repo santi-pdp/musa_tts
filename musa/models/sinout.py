@@ -9,7 +9,7 @@ class acoustic_rnn(speaker_model):
     """ acoustic RNN model """
 
     def __init__(self, num_inputs, emb_size, rnn_size, rnn_layers,
-                 dropout, sigmoid_out=False, speakers=None,
+                 dropout, sigmoid_out=True, speakers=None,
                  mulout=False, cuda=False):
         super(acoustic_rnn, self).__init__()
         """
@@ -30,6 +30,9 @@ class acoustic_rnn(speaker_model):
         self.num_outputs = 43
         self.dropout = dropout
         self.sigmoid_out = sigmoid_out
+        if not sigmoid_out:
+            print('BEWARE in aco model: not applying sigmoid to output, '
+                  'you may obtain classification values out of binary range')
         self.num_inputs = num_inputs
         if speakers is None or len(speakers) <= 1:
             self.speakers = None

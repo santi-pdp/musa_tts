@@ -496,7 +496,10 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     preds, gtruths = denorm_aco_preds_gtruth(preds, gtruths,
                                              spks, spk2acostats)
     aco_mcd = mcd(preds[:,:40], gtruths[:,:40], spks, idx2spk)
-    aco_afpr = afpr(np.round(preds[:,-1]), gtruths[:,-1], spks, 
+    #print('preds shape: ', preds.shape)
+    #print('gtruths shape: ', gtruths.shape)
+    aco_afpr = afpr(np.round(preds[:,-1]).reshape(-1, 1),
+                    gtruths[:,-1].reshape(-1, 1), spks, 
                     idx2spk)
     aco_f0_rmse, aco_f0_spk = rmse(np.exp(preds[:, -2]), 
                                    np.exp(gtruths[:, -2]),
@@ -514,6 +517,8 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
                         spks, idx2spk)
     masked_uv_preds = np.round(preds[:, -1]).reshape(-1, 1) * sil_mask
     masked_uv_gtruths = gtruths[:, -1].reshape(-1, 1) * sil_mask
+    #print('masked_uv_preds shape: ', masked_uv_preds.shape)
+    #print('masked_uv_gtruths shape: ', masked_uv_gtruths.shape)
     nosil_aco_afpr = afpr(masked_uv_preds, masked_uv_gtruths,
                           spks, idx2spk)
 
@@ -534,7 +539,7 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     print('========= Acc =========')
     #print('Evaluated aco AFPR [norm]: '.format(aco_afpr['A.total']))
     print('Evaluated aco W/O sil phones ({}) Acc [norm]:'
-          ''.format(sil_id, nosil_aco_afpr['A.total']))
+          '{}'.format(sil_id, nosil_aco_afpr['A.total']))
     print('=' * 30)
     #print('Evaluated w/ sil MCD of spks: {}'.format(json.dumps(aco_mcd,
     #                                                           indent=2)))

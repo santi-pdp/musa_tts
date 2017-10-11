@@ -73,6 +73,8 @@ def fpr(prediction, groundtruth):
 def afpr(prediction, groundtruth, spks=None, idx2spk=None):
     assert prediction.shape == groundtruth.shape
     #print('afpr prediction shape: ', prediction.shape)
+    #print('min pred uv: ', np.min(prediction))
+    #print('max pred uv: ', np.max(prediction))
     if prediction.ndim == 1:
         prediction = prediction.reshape(-1, 1)
         groundtruth = groundtruth.reshape(-1, 1)
