@@ -181,7 +181,7 @@ def main(opts):
                                  emb_size=opts.aco_emb_size,
                                  rnn_size=opts.aco_rnn_size,
                                  rnn_layers=opts.aco_rnn_layers,
-                                 sigmoid_out=opts.sigmoid_aco,
+                                 sigmoid_out=True,
                                  dropout=opts.aco_dout,
                                  speakers=list(dset.all_speakers.keys()),
                                  mulout=opts.aco_mulout,
