@@ -598,86 +598,120 @@ class TCSTAR_dur(TCSTAR):
                     self.phone_sample.append(phone_seq)
             pickle.dump(all_durs, open('/tmp/durs.pickle', 'wb'))
         else:
-            raise NotImplementedError('Review stateful dur dataset')
             print('-' * 50)
             print('Encoding dur samples with max_seq_len {} and batch_size '
                   '{}'.format(self.max_seq_len, self.batch_size))
             # First, arrange all sequences into one very long one
             # Then split it into batch_size sequences, and arrange
             # samples to follow batch_size interleaved samples (stateful)
-            all_code_seq = []
-            all_phone_seq = []
+            all_code_seq = {}
+            all_phone_seq = {}
             for spk, dur_seq, lab_seq in zip(total_parsed_spks,
                                              total_parsed_durs,
                                              total_parsed_labs):
                 for t_, (dur, lab) in enumerate(zip(dur_seq, lab_seq)):
                     code = lab_enc(lab, normalize='minmax', sort_types=False)
                     ndur = self.process_dur(spk, dur)
-                    all_code_seq.append([self.spk2idx[spk]] + code + [ndur])
-                    all_phone_seq.append(lab[:5])
+                    if spk not in all_code_seq:
+                        all_code_seq[spk] = []
+                        all_phone_seq[spk] = []
+                    all_code_seq[spk].append([self.spk2idx[spk]] +\
+                                              code + [ndur])
+                    all_phone_seq[spk].append(lab[:5])
                     if not hasattr(self, 'ling_feats_dim'):
                         self.ling_feats_dim = len(code)
                         print('setting ling feats dim: ', len(code))
-            # all_code_seq contains the large sequence of features (in, out)
-            all_seq_len = len(all_code_seq)
-            print('Lengt of all code_seq: ', all_seq_len)
-            total_batches = (all_seq_len // (self.batch_size * \
-                                             self.max_seq_len)) + 1
-            print('total stateful batches: ', total_batches)
-            # pad large sequences to operate with numpy arrays
-            pad_len = total_batches * (self.batch_size * self.max_seq_len) - \
-                      all_seq_len
-            print('pad_len: ', pad_len)
-            all_code_seq += [[0.] + [0.] * self.ling_feats_dim + [0]] * \
-                            pad_len
-            all_phone_seq += [['<PAD>'] * 5] * pad_len
-            co_arr = np.array(all_code_seq)
-            ph_arr = np.char.array(all_phone_seq)
-            print('co_arr shape: ', co_arr.shape)
-            print('ph_arr shape: ', ph_arr.shape)
-            # interleave numpy samples
-            co_arr = co_arr.reshape((self.batch_size, -1, co_arr.shape[-1]))
-            ph_arr = ph_arr.reshape((self.batch_size, -1, ph_arr.shape[-1]))
-            print('co_arr reshaped shape: ', co_arr.shape)
-            print('ph_arr reshaped shape: ', ph_arr.shape)
-            co_arr = np.split(co_arr, co_arr.shape[1] // self.max_seq_len, axis=1)
-            ph_arr = np.split(ph_arr, ph_arr.shape[1] // self.max_seq_len, axis=1)
-            print('Interleaved co_arr[0] shape: ', co_arr[0].shape)
-            co_arr = np.concatenate(co_arr, axis=0)
-            ph_arr = np.concatenate(ph_arr, axis=0)
-            print('Interleaved co_arr: ', co_arr.shape)
-            print('Interleaved ph_arr: ', ph_arr.shape)
-            # format data excluding padding symbols now
-            for phone_sample, vec_sample in zip(ph_arr, co_arr):
-                vec_seq = []
-                ph_seq = []
-                if phone_sample[0][0] == '<PAD>':
-                    # This sample is just a remaining of padding
-                    # do not include in samples
-                    break
-                for t_ in range(vec_sample.shape[0]):
-                    vec_seq_el = vec_sample[t_]
-                    ph_seq_el = phone_sample[t_]
-                    if ph_seq_el[0] == '<PAD>':
-                        print('Breaking list format loop at t_ {}'.format(t_))
-                        break
-                    dur_i_t = vec_seq_el[-1]
-                    if self.q_classes is not None:
-                        dur_i_t = np.array(dur_i_t, dtype=np.int64)
-                    vec_seq.append([vec_seq_el[0], vec_seq_el[1:-1], 
-                                    dur_i_t])
-                    ph_seq.append(ph_seq_el.tolist())
+            all_seq_len = {}
+            if self.trim_to_min:
+                # count each spks samples
+                counts = {}
+                counts_min = np.inf
+                counts_spk = None
+            for spkname, spkdata in all_code_seq.items():
+                # all_code_seq contains the large sequence of features (in, out)
+                all_seq_len[spkname] = len(spkdata)
+                print('{}: Length of all code_seq: '
+                      '{}'.format(spkname,
+                                  all_seq_len[spkname]))
+                # trim data to fit stateful arrangement
+                total_batches = all_seq_len[spkname] // (self.batch_size * \
+                                                         self.max_seq_len)
+                tri_code_seq = spkdata[:self.batch_size * self.max_seq_len * \
+                                        total_batches]
+                all_code_seq[spkname] = tri_code_seq
+                tri_phone_seq = all_phone_seq[spkname][:self.batch_size * \
+                                                       self.max_seq_len * \
+                                                       total_batches]
+                all_phone_seq[spkname] = tri_phone_seq
+                print('total stateful batches: ', total_batches)
+                if total_batches <= 0:
+                    raise ValueError('Not enough dur samples to statefulize '
+                                     'with specified max_len ({}) and '
+                                     'batch_size ({})'.format(self.max_seq_len,
+                                                              self.batch_size))
+
+                # Create dict of data to statefulize codes and phones data
+                to_st_data = {'co':{'data':all_code_seq[spkname], 
+                                    'np_class':np.array},
+                              'ph':{'data':all_phone_seq[spkname],
+                                    'np_class':np.char.array}}
+                st_data = statefulize_data(to_st_data, self.batch_size,
+                                           self.max_seq_len)
+                co_arr = st_data['co']['st_data']
+                ph_arr = st_data['ph']['st_data']
+
+                # re-format data per speaker excluding padding symbols now
+                for phone_sample, vec_sample in zip(ph_arr, co_arr):
+                    vec_seq = []
+                    ph_seq = []
+                    for t_ in range(vec_sample.shape[0]):
+                        vec_seq_el = vec_sample[t_]
+                        ph_seq_el = phone_sample[t_]
+                        dur_i_t = vec_seq_el[-1]
+                        if self.q_classes is not None:
+                            dur_i_t = np.array(dur_i_t, dtype=np.int64)
+                        vec_seq.append([vec_seq_el[0], 
+                                        vec_seq_el[1:-1], 
+                                        dur_i_t])
+                        ph_seq.append(ph_seq_el.tolist())
+                    if self.mulout:
+                        spk_name = self.idx2spk[vec_seq_el[0]] 
+                        if spk_name not in self.vec_sample:
+                            self.vec_sample[spk_name] = []
+                            self.phone_sample[spk_name] = []
+                        self.vec_sample[spk_name].append(vec_seq)
+                        self.phone_sample[spk_name].append(ph_seq)
+                    else:
+                        self.vec_sample.append(vec_seq)
+                        self.phone_sample.append(ph_seq)
+                    if self.trim_to_min:
+                        spk_name = self.idx2spk[vec_seq_el[0]]
+                        if spk_name not in counts:
+                            counts[spk_name] = 0
+                        counts[spk_name] += 1
+            if self.trim_to_min:
+                for spk_name, cnt in counts.items():
+                    if counts[spk_name] < counts_min:
+                        counts_min = counts[spk_name]
+                        counts_spk = spk_name
+                print('-- Trimming speaker samples --')
+                print('counts_min: ', counts_min)
+                print('counts_spk: ', counts_spk)
+                print('len self.vec_sample prior to '
+                      'trim: ', len(self.vec_sample))
+                self.vec_sample, \
+                self.phone_sample = trim_spk_samples(self.vec_sample,
+                                                     self.phone_sample,
+                                                     counts_min,
+                                                     self.mulout)
+                print('len self.vec_sample after trim: ', len(self.vec_sample))
                 if self.mulout:
-                    spk_name = self.idx2spk[vec_seq_el[0]] 
-                    if spk_name not in self.vec_sample:
-                        self.vec_sample[spk_name] = []
-                        self.phone_sample[spk_name] = []
-                    self.vec_sample[spk_name].append(vec_seq)
-                    self.phone_sample[spk_name].append(ph_seq)
-                else:
-                    self.vec_sample.append(vec_seq)
-                    self.phone_sample.append(ph_seq)
-            print('-' * 50)
+                    # go over all speaker ids and trim to max amount of samples
+                    for spkname, phsample in self.phone_sample.items():
+                        print('-' * 60)
+                        print('spk {} phsample len: '
+                              '{}'.format(spkname, len(phsample)))
+        print('-' * 50)
         end_t = timeit.default_timer()
         print('TCSTAR_dur-{} > Vectorized dur samples in {:.4f} '
               's'.format(self.split, end_t - beg_t))

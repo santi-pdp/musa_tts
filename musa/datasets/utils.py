@@ -468,13 +468,14 @@ def statefulize_data(data, batch_size, seq_len):
         data_vals = datav['data']
         np_class = datav['np_class']
         data_arr = np_class(data_vals)
-        print('np type of {}: {}'.format(datak, type(data_arr)))
+        #print('data_arr shape: ', data_arr.shape)
+        #print('np type of {}: {}'.format(datak, type(data_arr)))
         data_arr = data_arr.reshape((batch_size, -1, data_arr.shape[-1]))
-        print('{}_arr shape: {}'.format(datak, data_arr.shape))
+        #print('{}_arr shape: {}'.format(datak, data_arr.shape))
         data_arr = np.split(data_arr, data_arr.shape[1] // seq_len, axis=1)
-        print('Interleaved {}_arr[0] shape: {}'.format(datak, data_arr[0].shape))
+        #print('Interleaved {}_arr[0] shape: {}'.format(datak, data_arr[0].shape))
         data_arr = np.concatenate(data_arr, axis=0)
-        print('Interleaved {}_arr:{}'.format(datak, data_arr.shape))
+        #print('Interleaved {}_arr:{}'.format(datak, data_arr.shape))
         st_data[datak]['st_data'] = data_arr
     return st_data
 
