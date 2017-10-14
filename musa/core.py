@@ -538,8 +538,14 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
                                                                 indent=2)))
     print('========= Acc =========')
     #print('Evaluated aco AFPR [norm]: '.format(aco_afpr['A.total']))
-    print('Evaluated aco W/O sil phones ({}) Acc [norm]:'
+    print('Evaluated W/O sil phones ({}) Acc [norm]:'
           '{}'.format(sil_id, nosil_aco_afpr['A.total']))
+    print('Evaluated W/O sil phones ({}) P [norm]:'
+          '{}'.format(sil_id, nosil_aco_afpr['P.total']))
+    print('Evaluated W/O sil phones ({}) R [norm]:'
+          '{}'.format(sil_id, nosil_aco_afpr['R.total']))
+    print('Evaluated W/O sil phones ({}) F1 [norm]:'
+          '{}'.format(sil_id, nosil_aco_afpr['F.total']))
     print('=' * 30)
     #print('Evaluated w/ sil MCD of spks: {}'.format(json.dumps(aco_mcd,
     #                                                           indent=2)))
