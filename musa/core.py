@@ -683,14 +683,24 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
         if k == 'total':
             # skip this key
             continue
-        # transform each key into the desired loss filename 
-        new_keys_d['mo-{}_va_mcd'.format(k)] = nosil_aco_mcd[k]
+        if mulout:
+            # transform each key into the desired loss filename 
+            new_keys_d['mo-{}_va_mcd'.format(k)] = nosil_aco_mcd[k]
+        else:
+            # transform each key into the desired loss filename 
+            new_keys_d['so-{}_va_mcd'.format(k)] = nosil_aco_mcd[k]
     for k in nosil_aco_afpr.keys():
         if k == 'total':
             continue
-        new_keys_d['mo-{}_va_afpr'.format(k)] = nosil_aco_afpr[k]
+        if mulout:
+            new_keys_d['mo-{}_va_afpr'.format(k)] = nosil_aco_afpr[k]
+        else:
+            new_keys_d['so-{}_va_afpr'.format(k)] = nosil_aco_afpr[k]
     for k in nosil_aco_f0_spk.keys():
-        new_keys_d['mo-{}_va_f0rmse'.format(k)] = nosil_aco_f0_spk[k]
+        if mulout:
+            new_keys_d['mo-{}_va_f0rmse'.format(k)] = nosil_aco_f0_spk[k]
+        else:
+            new_keys_d['so-{}_va_f0rmse'.format(k)] = nosil_aco_f0_spk[k]
     new_keys_d.update({'total_aco_mcd':aco_mcd['total'],
                        'total_nosil_aco_mcd':nosil_aco_mcd['total'],
                        'total_aco_afpr':aco_afpr['total'],
