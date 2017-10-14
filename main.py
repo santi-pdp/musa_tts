@@ -188,6 +188,7 @@ def main(opts):
         # TODO: hardcoded atm
         aco_outputs = 43
         # build an acoustic model ready to train
+        # +2 for dur inputs
         aco_model = acoustic_rnn(num_inputs=dset.ling_feats_dim + 2,
                                  #num_outputs=aco_outputs,
                                  emb_size=opts.aco_emb_size,
@@ -237,6 +238,72 @@ def main(opts):
                      eval_patience=opts.patience,
                      cuda=opts.cuda,
                      va_opts=va_opts)
+    if opts.synthesize_lab is not None:
+        if opts.dur_weights is None or opts.aco_weights is None:
+            raise ValueError('Please specify dur_weights and aco_weights in '
+                             'synthesis mode.')
+        with open(opts.cfg_spk, 'rb') as cfg_f:
+            cfg = pickle.load(cfg_f)
+            idx2spk = {}
+            spk2durstats = {}
+            spk2acostats = {}
+            for spk_id, spk_cfg in cfg.items():
+                if 'idx' in spk_cfg:
+                    idx2spk[int(spk_cfg['idx'])] = spk_id
+                if 'dur_stats' in spk_cfg:
+                    spk2durstats[int(spk_cfg['idx'])] = spk_cfg['dur_stats']
+                if 'aco_stats' in spk_cfg:
+                    spk2acostats[int(spk_cfg['idx'])] = spk_cfg['aco_stats']
+            with open(opts.codebooks_dir, 'rb') as cbooks_f:
+                # read cbooks lengths to get ling_feats_dim
+                cbooks = pickle.load(cbooks_f)
+                ling_feats_dim = 0
+                for k, v in cbooks.items():
+                    if 'mean' in v:
+                        # real value
+                        ling_feats_dim += 1
+                    else:
+                        # categorical value
+                        ling_feats_dim += len(v)
+                    # 6 boolean factors
+                ling_feats_dim += 6
+                print('ling_feats_dim: ', ling_feats_dim)
+            # build a duration model ready to train
+            dur_model = sinout_duration(num_inputs=ling_feats_dim,
+                                        num_outputs=1,
+                                        emb_size=opts.dur_emb_size,
+                                        rnn_size=opts.dur_rnn_size,
+                                        rnn_layers=opts.dur_rnn_layers,
+                                        sigmoid_out=True,
+                                        dropout=opts.dur_dout,
+                                        speakers=None,
+                                        mulout=opts.dur_mulout,
+                                        cuda=opts.cuda)
+            print('Loading duration model: ', opts.dur_weights)
+            dur_model.load(opts.dur_weights)
+            print('spk2durstats: ', json.dumps(spk2durstats, indent=2))
+            # TODO: load dur model weights
+            # build an acoustic model ready to train
+            # TODO: load aco model with weights
+            aco_model = acoustic_rnn(num_inputs=ling_feats_dim + 2,
+                                     #num_outputs=aco_outputs,
+                                     emb_size=opts.aco_emb_size,
+                                     rnn_size=opts.aco_rnn_size,
+                                     rnn_layers=opts.aco_rnn_layers,
+                                     sigmoid_out=True,
+                                     dropout=opts.aco_dout,
+                                     speakers=['73'],
+                                     mulout=opts.aco_mulout,
+                                     cuda=opts.cuda)
+            print('Loading acoustic model: ',  opts.aco_weights)
+            aco_model.load(opts.aco_weights)
+            print('idx2spk: ', json.dumps(idx2spk, indent=2))
+            # get lab file basename
+            lab_fname = os.path.basename(opts.synthesize_lab)
+            lab_bname, _ = os.path.splitext(lab_fname)
+            synthesize(dur_model, aco_model, 1, spk2durstats, spk2acostats,
+                       opts.save_path, lab_bname, opts.codebooks_dir, opts.synthesize_lab, 
+                       cuda=False)
 
 
 if __name__ == '__main__':
@@ -244,6 +311,8 @@ if __name__ == '__main__':
     parser.add_argument('--cfg_spk', type=str, default='cfg/tcstar.cfg')
     parser.add_argument('--lab_dir', type=str, default='data/tcstar/lab')
     parser.add_argument('--aco_dir', type=str, default='data/tcstar/aco')
+    parser.add_argument('--synthesize_lab', type=str, default=None,
+                        help='Lab filename to be synthesized')
     parser.add_argument('--codebooks_dir', type=str,
                         default='data/tcstar/codebooks.pkl')
     parser.add_argument('--save_path', type=str, default='ckpt')
@@ -272,6 +341,10 @@ if __name__ == '__main__':
                              'If specified, this will triger '
                              'quantization in dloader and softmax '
                              'output for the model (Def: None).')
+    parser.add_argument('--dur_weights', type=str, default=None,
+                        help='Trained dur model weights')
+    parser.add_argument('--aco_weights', type=str, default=None,
+                        help='Trained aco model weights')
     parser.add_argument('--aco_q_classes', type=int, default=None,
                         help='Num of clusters in aco quantization. '
                              'If specified, this will triger '
