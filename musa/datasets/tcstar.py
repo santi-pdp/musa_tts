@@ -924,10 +924,11 @@ class TCSTAR_aco(TCSTAR):
                     all_phone_seq[spk].append(lab[:5])
                     if not hasattr(self, 'ling_feats_dim'):
                         self.ling_feats_dim = len(code)
-                        print('setting ling feats dim: ', len(code))
+                        print('setting ACO ling feats dim: ',
+                              self.ling_feats_dim)
                     if not hasattr(self, 'aco_feats_dim'):
                         self.aco_feats_dim = len(naco)
-                        print('setting aco feats dim: ', len(naco))
+                        print('setting ACO aco feats dim: ', len(naco))
         all_seq_len = {}
         if self.trim_to_min:
             # count each spks samples

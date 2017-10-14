@@ -160,7 +160,7 @@ def denorm_minmax(y, out_min, out_max):
     R = out_max - out_min
     x = y * R + out_min
     #print('denorm minmax {} -> {}'.format(y, x))
-    return y * R + out_min
+    return x
 
 def predict_masked_mcd(y, aco_b, slen_b, spk_b, curr_ph_b,
                        preds, gtruths, spks, sil_mask,

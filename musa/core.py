@@ -2,7 +2,9 @@ import torch
 from torch.autograd import Variable
 import torch.nn.functional as F
 from .utils import *
+from .datasets.utils import label_parser, label_encoder
 import numpy as np
+import struct
 import json
 import os
 
@@ -68,6 +70,121 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
                 print('Saving val score ', k)
                 np.save(os.path.join(save_path, k), v)
 
+def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
+               save_path, out_fname, codebooks, lab_file, ogmios_fmt=True, 
+               cuda=False):
+    dur_model.eval()
+    lab_parser = label_parser(ogmios_fmt=ogmios_fmt)
+    lab_enc = label_encoder(codebooks_path=codebooks,
+                            lab_data=None,
+                            force_gen=False)
+    spk_int = spk_id
+    with open(lab_file, 'r') as lf:
+        lab_lines = [l.rstrip() for l in lf.readlines()]
+    tstamps, parsed_lab = lab_parser(lab_lines)
+    lab_codes = []
+    for l_n, lab in enumerate(parsed_lab, start=1):
+        #print('Encoding[{}]={}'.format(l_n, lab))
+        code = lab_enc(lab, normalize='minmax', sort_types=False)
+        #print('code[{}]:{}'.format(l_n, code))
+        lab_codes.append(code)
+    lab_codes = np.array(lab_codes, dtype=np.float32)
+    print('lab_codes shape: ', lab_codes.shape)
+    # prepare input data
+    lab_codes = Variable(torch.from_numpy(lab_codes).unsqueeze(0))
+    lab_codes = lab_codes.transpose(0, 1)
+    if spk_id is not None:
+        spk_id = Variable(torch.LongTensor([spk_id] * lab_codes.size(0)))
+        spk_id = spk_id.view(lab_codes.size(0), 1, 1)
+    if cuda:
+        lab_codes = lab_codes.cuda()
+        if spk_id is not None:
+            spk_id = spk_id.cuda()
+
+    # TODO: add forced_dur option from labs?
+    # predict dur
+    dur, _ = dur_model(lab_codes, None, spk_id)
+    durstats = spk2durstats[spk_int]
+    print('Selected spk {} durstats {}'.format(spk_id, 
+                                               json.dumps(durstats)))
+    # normalize durs
+    ndurs = (dur - durstats['min']) / \
+            (durstats['max'] - durstats['min'])
+    print('ndur size: ', ndurs.size())
+    # build acoustic batch
+    aco_inputs = []
+    # go over time dur by dur
+    for t in range(ndurs.size(0)):
+        ndur = np.asscalar(ndurs[t, :, :].data.numpy())
+        # go over all windows within this dur
+        reldur_c = 0.
+        dur_t = np.asscalar(dur[t, :, :].data.numpy())
+        print('dur_t: ', dur_t)
+        while reldur_c < dur_t:
+            n_reldur = float(reldur_c) / dur_t
+            print('n_reldur: ', n_reldur)
+            # every 5ms, shift. TODO: change hardcode to allow speed variation
+            reldur_c += 0.005
+            print('lab_codes[t, 0, :].size()=', lab_codes[t, 0, :].size())
+            aco_inputs.append(np.concatenate((lab_codes[t, 0, :].data.numpy(),
+                                             np.array([ndur, n_reldur]))))
+        #reldur = reldur_c / dur
+        #aco_inputs
+    print('aco_inputs len: ', len(aco_inputs))
+    aco_seqlen = len(aco_inputs)
+    aco_inputs = Variable(torch.FloatTensor(aco_inputs)).view(aco_seqlen, 1, -1)
+    print('aco_inputs size: ', aco_inputs.size())
+    if cuda:
+        aco_inputs = aco_inputs.cuda()
+    # TODO: forward through aco model
+    yt, hstate, ostate = aco_model(aco_inputs,
+                                   None, None,
+                                   spk_id)
+    print('yt size: ', yt.size())
+    # TODO: denormalize aco predictions 
+    acostats = spk2acostats[spk_int]
+    min_aco = acostats['min']
+    max_aco = acostats['max']
+    yt_npy = yt.cpu().data.numpy()
+    print('max acot: ', yt_npy.max())
+    print('min acot: ', yt_npy.min())
+    acot = denorm_minmax(yt_npy, min_aco, max_aco)
+    print('Post normalize')
+    print('max acot: ', acot.max())
+    print('min acot: ', acot.min())
+    # TODO: save resulting acoustic predictions
+    # delete batch dimension
+    acot = acot.squeeze(1)
+    print('acot shape: ', acot.shape)
+    mfcc = acot[:, :40].reshape(-1).tolist()
+    fv = acot[:, -3].reshape(-1)
+    lf0 = acot[:, -2].reshape(-1)
+    uv = np.round(acot[:, -1].reshape(-1))
+    fv[np.where(uv == 0)] = 1000.0
+    lf0[np.where(uv == 0)] = -10000000000.0
+    fv = fv.tolist()
+    lf0 = lf0.tolist()
+    uv = uv.tolist()
+    assert len(uv) == len(fv), 'uv len {} != ' \
+                               'fv len {}'.format(len(uv),
+                                                    len(fv))
+    # write the output ahocoder files
+    mfcc_b = struct.pack('f' * len(mfcc), *mfcc)
+    fv_b = struct.pack('f' * len(fv), *fv)
+    lf0_b = struct.pack('f' * len(lf0), *lf0)
+    with open(os.path.join(save_path, 
+                           '{}.mfcc'.format(out_fname)), 'wb') as mfcc_f:
+        mfcc_f.write(mfcc_b)
+    with open(os.path.join(save_path, 
+                           '{}.fv'.format(out_fname)), 'wb') as fv_f:
+        fv_f.write(fv_b)
+    with open(os.path.join(save_path, 
+                           '{}.lf0'.format(out_fname)), 'wb') as lf0_f:
+        lf0_f.write(lf0_b)
+
+
+    
+
 def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
                     criterion=None, cuda=False, tr_opts={},
                     spk2acostats=None):
@@ -112,6 +229,10 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
         spk_b = Variable(spk_b).transpose(0,1).contiguous()
         spk_name = idx2spk[spk_b.data[0,0]]
         lab_b = Variable(lab_b).transpose(0,1).contiguous()
+        #for t in range(25):
+        #    print('{} -> dur: {}, reldur: {}'.format(t+1,
+        #                                            np.asscalar(lab_b[t, 0, -2].data.numpy()),
+        #                                            np.asscalar(lab_b[t, 0, -1].data.numpy())))
         aco_b = Variable(aco_b).transpose(0,1).contiguous()
         slen_b = Variable(slen_b)
         # get curr batch size
