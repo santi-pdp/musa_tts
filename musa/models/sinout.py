@@ -34,6 +34,7 @@ class acoustic_rnn(speaker_model):
             print('BEWARE in aco model: not applying sigmoid to output, '
                   'you may obtain classification values out of binary range')
         self.num_inputs = num_inputs
+        self.mulout = mulout
         if speakers is None or len(speakers) <= 1:
             self.speakers = None
             self.mulout = False
@@ -41,7 +42,6 @@ class acoustic_rnn(speaker_model):
             print('Acoustically modeling speakers: ', self.speakers)
             self.speakers = speakers
             self.mulout = mulout
-        self.mulout = mulout
         self.num_inputs = num_inputs
         # -- Embedding layers (merge of input features)
         self.input_fc = nn.Linear(num_inputs, self.emb_size)
