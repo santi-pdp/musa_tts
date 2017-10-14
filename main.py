@@ -82,7 +82,7 @@ def main(opts):
                                     speakers=model_spks,
                                     mulout=opts.dur_mulout,
                                     cuda=opts.cuda)
-        adam = optim.Adam(dur_model.parameters(), lr=opts.dur_lr)
+        opti = optim.RMSprop(dur_model.parameters(), lr=opts.dur_lr)
         if opts.cuda:
             dur_model.cuda()
         print('*' * 30)
@@ -117,7 +117,7 @@ def main(opts):
             va_opts['mulout'] = True
         if opts.dur_q_classes is not None:
             va_opts['q_classes'] = True
-        train_engine(dur_model, dloader, adam, opts.log_freq, train_dur_epoch,
+        train_engine(dur_model, dloader, opti, opts.log_freq, train_dur_epoch,
                      criterion,
                      opts.epoch, opts.save_path, 'dur_model.ckpt',
                      tr_opts=tr_opts,
@@ -199,7 +199,7 @@ def main(opts):
                                  speakers=model_spks,
                                  mulout=opts.aco_mulout,
                                  cuda=opts.cuda)
-        adam = optim.Adam(aco_model.parameters(), lr=opts.aco_lr)
+        opti = optim.Adam(aco_model.parameters(), lr=opts.aco_lr)
         if opts.cuda:
             aco_model.cuda()
         print('*' * 30)
@@ -225,7 +225,7 @@ def main(opts):
             tr_opts['mulout'] = True
             va_opts['mulout'] = True
         # TODO: finish engine methods to train/eval acoustic model
-        train_engine(aco_model, dloader, adam, opts.log_freq, train_aco_epoch,
+        train_engine(aco_model, dloader, opti, opts.log_freq, train_aco_epoch,
                      criterion,
                      opts.epoch, opts.save_path, 'aco_model.ckpt',
                      tr_opts=tr_opts,
