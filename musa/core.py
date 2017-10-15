@@ -659,8 +659,14 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
                                                                 indent=2)))
     print('========= Acc =========')
     #print('Evaluated aco AFPR [norm]: '.format(aco_afpr['A.total']))
-    print('Evaluated aco W/O sil phones ({}) Acc [norm]:'
+    print('Evaluated W/O sil phones ({}) Acc [norm]:'
           '{}'.format(sil_id, nosil_aco_afpr['A.total']))
+    print('Evaluated W/O sil phones ({}) P [norm]:'
+          '{}'.format(sil_id, nosil_aco_afpr['P.total']))
+    print('Evaluated W/O sil phones ({}) R [norm]:'
+          '{}'.format(sil_id, nosil_aco_afpr['R.total']))
+    print('Evaluated W/O sil phones ({}) F1 [norm]:'
+          '{}'.format(sil_id, nosil_aco_afpr['F.total']))
     print('=' * 30)
     #print('Evaluated w/ sil MCD of spks: {}'.format(json.dumps(aco_mcd,
     #                                                           indent=2)))
@@ -677,14 +683,24 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
         if k == 'total':
             # skip this key
             continue
-        # transform each key into the desired loss filename 
-        new_keys_d['mo-{}_va_mcd'.format(k)] = nosil_aco_mcd[k]
+        if mulout:
+            # transform each key into the desired loss filename 
+            new_keys_d['mo-{}_va_mcd'.format(k)] = nosil_aco_mcd[k]
+        else:
+            # transform each key into the desired loss filename 
+            new_keys_d['so-{}_va_mcd'.format(k)] = nosil_aco_mcd[k]
     for k in nosil_aco_afpr.keys():
         if k == 'total':
             continue
-        new_keys_d['mo-{}_va_afpr'.format(k)] = nosil_aco_afpr[k]
+        if mulout:
+            new_keys_d['mo-{}_va_afpr'.format(k)] = nosil_aco_afpr[k]
+        else:
+            new_keys_d['so-{}_va_afpr'.format(k)] = nosil_aco_afpr[k]
     for k in nosil_aco_f0_spk.keys():
-        new_keys_d['mo-{}_va_f0rmse'.format(k)] = nosil_aco_f0_spk[k]
+        if mulout:
+            new_keys_d['mo-{}_va_f0rmse'.format(k)] = nosil_aco_f0_spk[k]
+        else:
+            new_keys_d['so-{}_va_f0rmse'.format(k)] = nosil_aco_f0_spk[k]
     new_keys_d.update({'total_aco_mcd':aco_mcd['total'],
                        'total_nosil_aco_mcd':nosil_aco_mcd['total'],
                        'total_aco_afpr':aco_afpr['total'],
