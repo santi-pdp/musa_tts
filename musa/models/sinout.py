@@ -15,6 +15,41 @@ class acoustic_rnn(speaker_model):
         super(acoustic_rnn, self).__init__(num_inputs, mulspk_type, 
                                            speakers=speakers,
                                            cuda=cuda)
+        self.emb_size = emb_size
+        self.rnn_size = rnn_size
+        self.rnn_layers = rnn_layers
+        #self.num_outputs = num_outputs
+        self.num_outputs = 43
+        self.dropout = dropout
+        self.sigmoid_out = sigmoid_out
+        if not sigmoid_out:
+            print('BEWARE in aco model: not applying sigmoid to output, '
+                  'you may obtain classification values out of binary range')
+        self.num_inputs = num_inputs
+        print('aco_rnn num_inputs=', num_inputs)
+        # build embedding of spks (if required) 
+        self.build_spk_embedding()
+        # -- Build tanh embedding trunk
+        self.build_input_embedding()
+        # -- Build recurrent component
+        self.build_core_rnn()
+        # -- Build output mapping RNN(s)
+        self.build_output(rnn_output=True)
+
+    def forward(self, dling_features, hid_state=None, out_state=None,
+                speaker_idx=None):
+        """ Forward the duration + linguistic features, and the speaker ID
+            # Arguments
+                dling_features: Tensor with encoded linguistic features and
+                duration (absolute + relative)
+                speaker_id: Tensor with speaker idx to be generated
+        """
+        if self.mulout and out_state is not None:
+            assert isinstance(out_state, dict), type(out_state)
+        if self.mulout and out_state is None:
+            out_state = dict((spk, None) for spk in self.speakers)
+        # forward through embedding
+        x = self.forward_input_embedding(dling_features, speaker_idx)
         # forward through RNN core
         x, hid_state = self.forward_core(x, hid_state)
         # forward through output RNN
