@@ -81,9 +81,13 @@ def parse_lab_aco_correspondences(durs, aco_data):
         reldur = (wind_t - acum_dur) / curr_ph_dur
         reldurs[curr_dur_idx].append([reldur, curr_ph_dur / sr])
         #print('Curr wind_t: {}, cboundary: {}, curr_dur_idx: '
-        #      '{}, reldur: {}'.format(wind_t, cboundary, 
-        #                              curr_dur_idx,
-        #                              reldur))
+        #      '{}, reldur: {}, curr_ph_dur: {},'
+        #      'curr_ph_dur / sr: {}'.format(wind_t, 
+        #                                    cboundary, 
+        #                                    curr_dur_idx,
+        #                                    reldur,
+        #                                    curr_ph_dur,
+        #                                    curr_ph_dur / sr))
         wind_t += wind_stride
     return aco_seq_data, reldurs
 
@@ -470,12 +474,21 @@ class TCSTAR(Dataset):
                 # dur stats are necessary for absolute duration normalization
                 if self.split == 'train' and ('dur_stats' not in spk or \
                                               self.force_gen):
-                    flat_durs = [fd for dseq in parsed_durs for fd in dseq]
+                    #print('len parsed_durs: ', len(result[-1]))
+                    #flat_durs = [fd for dseq in parsed_durs for fd in dseq]
+                    flat_durs = []
+                    for dfile in result[-1]:
+                        for dseq in dfile:
+                            for dpho in dseq:
+                                fd = dpho[1]
+                                flat_durs.append(fd)
+                    #print('len flat_durs: ', len(flat_durs))
+                    #print('flat_durs: ', flat_durs)
                     # if they do not exist (or force_gen) and it's train split
                     dur_min = np.min(flat_durs)
-                    assert dur_min > 0, dur_min
+                    #assert dur_min > 0, dur_min
                     dur_max = np.max(flat_durs)
-                    assert dur_max > 0, dur_max
+                    #assert dur_max > 0, dur_max
                     assert dur_max > dur_min, dur_max
                     spk['dur_stats'] = {'min':dur_min,
                                         'max':dur_max}
@@ -548,7 +561,7 @@ class TCSTAR_dur(TCSTAR):
         total_parsed_spks = self.parse_labs(lab_parser, 
                                             compute_dur_stats=self.norm_dur,
                                             compute_dur_classes=(self.q_classes is \
-                                                            not None))
+                                                                 not None))
         # Build label encoder (codebooks will be made if they don't exist or
         # if they are forced)
         lab_enc = label_encoder(codebooks_path=lab_codebooks_path,
@@ -904,7 +917,8 @@ class TCSTAR_aco(TCSTAR):
                                                              reldur_seq)):
                 #print('len(aco) = ', len(aco))
                 #print('len(reldur) = ', len(reldur))
-                code = lab_enc(lab, normalize='minmax', sort_types=False)
+                #code = lab_enc(lab, normalize='minmax', sort_types=False)
+                code = lab_enc(lab, normalize='znorm', sort_types=False)
                 for aco_ph, reldur_ph in zip(aco, reldur):
                     #print('len(reldur_ph)=', len(reldur_ph))
                     #print('reldur_ph[0]=', reldur_ph[0])
@@ -1014,6 +1028,12 @@ class TCSTAR_aco(TCSTAR):
                                                  counts_min,
                                                  self.mulout)
             print('len self.vec_sample after trim: ', len(self.vec_sample))
+            first_vec_len = len(self.vec_sample[0])
+            raw_aco = []
+            for vi, vseq in enumerate(self.vec_sample):
+                for vsample in vseq:
+                    raw_aco.append(vsample[1])
+            np.save('/tmp/{}-aco.npy'.format(self.split), raw_aco)
             if self.mulout:
                 # go over all speaker ids and trim to max amount of samples
                 for spkname, phsample in self.phone_sample.items():
