@@ -96,6 +96,10 @@ class label_encoder(object):
                         # accumulate value to compute statistics
                         codebooks[cbook].append(float(lab_el))
                         if line_i >= num_lines:
+                            # save this final floats
+                            #np.save('/tmp/{}_symbols'.format(cbook), codebooks[cbook])
+                            # get unique symbols
+                            codebooks[cbook] = list(set(codebooks[cbook]))
                             cbook_len = len(codebooks[cbook])
                             assert cbook_len > 0, cbook_len
                             # if last line, compute final stats
