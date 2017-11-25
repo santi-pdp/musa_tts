@@ -4,7 +4,14 @@ import os
 import re
 import json
 import pdb
+import struct
 
+
+def read_bin_aco_file(aco_filename):
+    with open(aco_filename, 'rb') as aco_f:
+        aco_bs = aco_f.read()
+        aco_data = struct.unpack('{}f'.format(int(len(aco_bs) / 4)), aco_bs)
+        return np.array(aco_data, dtype=np.float32)
 
 class label_encoder(object):
 

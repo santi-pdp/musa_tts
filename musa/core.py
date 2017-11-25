@@ -521,6 +521,7 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     idx2spk = None
     if 'idx2spk' in va_opts:
         idx2spk = va_opts.pop('idx2spk')
+    mulout = False
     if 'mulout' in va_opts:
         print('Multi-Output aco evaluation')
         mulout = va_opts.pop('mulout')

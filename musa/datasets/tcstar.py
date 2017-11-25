@@ -8,6 +8,7 @@ import sys
 from musa.ops import *
 from .utils import *
 import timeit
+import struct
 import numpy as np
 import multiprocessing as mp
 from sklearn.cluster import KMeans
@@ -16,18 +17,17 @@ import copy
 
 def read_aco_file(spk_name, file_id, aco_dir):
     spk_aco_dir = os.path.join(aco_dir, spk_name)
-    cc_f = os.path.join(spk_aco_dir, '{}.cc'.format(file_id))
-    fv_f = os.path.join(spk_aco_dir, '{}.fv'.format(file_id))
-    lf0_f = os.path.join(spk_aco_dir, '{}.lf0'.format(file_id))
-    # load aco files with txt format
-    cc = np.loadtxt(cc_f)
-    fv = np.loadtxt(fv_f).reshape(-1, 1)
-    lf0 = np.loadtxt(lf0_f)
+    cc = read_bin_aco_file(os.path.join(spk_aco_dir, '{}.cc'.format(file_id)))
+    fv = read_bin_aco_file(os.path.join(spk_aco_dir, '{}.fv'.format(file_id)))
+    lf0 = read_bin_aco_file(os.path.join(spk_aco_dir, '{}.lf0'.format(file_id)))
+    fv = fv.reshape((-1, 1))
+    cc = cc.reshape((-1, 40))
     # make lf0 interpolation and obtain u/v flag
     i_lf0, uv = interpolation(lf0,
                               unvoiced_symbol=-10000000000.0)
     i_lf0 = i_lf0.reshape(-1, 1)
     uv = uv.reshape(-1, 1)
+    #print('cc shape: ', cc.shape)
     # merge into aco structure
     aco_data = np.concatenate((cc, fv, i_lf0, uv), axis=1)
     return aco_data
@@ -46,6 +46,8 @@ def parse_lab_aco_correspondences(durs, aco_data):
     # convert dur into samples, knowing
     # sampling rate is 16kHz and dur is
     # in seconds
+    #print('Parsing aco w/ durs: ', durs)
+    #print('Parsing aco w/ acos shape: ', len(aco_data))
     cboundary = int(durs[curr_dur_idx] * sr)
     # keep track of curr ph dur to compute reldur
     curr_ph_dur = int(durs[curr_dur_idx] * sr)
@@ -102,8 +104,8 @@ def read_speaker_labs(spk_name, ids_list, lab_dir, lab_parser,
     flat_tstamps = []
     flat_lines = []
     beg_t = timeit.default_timer()
-    if filter_by_dur:
-        log_file = open('/tmp/dur_filter.log', 'w')
+    #if filter_by_dur:
+        #log_file = open('/tmp/dur_filter.log', 'w')
     for id_i, split_id in enumerate(ids_list, start=1):
         spk_lab_dir = os.path.join(lab_dir, spk_name)
         lab_f = os.path.join(spk_lab_dir, '{}.lab'.format(split_id))
@@ -126,11 +128,11 @@ def read_speaker_labs(spk_name, ids_list, lab_dir, lab_parser,
                     filtered_tstamps.append(tss)
                 else:
                     #print('Filtered dur: ', dur)
-                    log_file.write('Filtred dur {} at file '
-                                   '{}.lab\n'.format(dur, 
-                                                 os.path.join(lab_dir,
-                                                              spk_name,
-                                                              split_id)))
+                    #log_file.write('Filtred dur {} at file '
+                    #               '{}.lab\n'.format(dur, 
+                    #                             os.path.join(lab_dir,
+                    #                                          spk_name,
+                    #                                          split_id)))
 
             flat_lines += filtered_lab
             flat_tstamps += filtered_tstamps
@@ -144,6 +146,9 @@ def read_speaker_labs(spk_name, ids_list, lab_dir, lab_parser,
             flat_lines += parsed_lab
             flat_tstamps += tstamps
         if aco_dir is not None:
+            #print('split_id: ', split_id)
+            #print('parsed_tstamps: ', parsed_tstamps)
+            #print('parsed_tstamps[-1]: ', parsed_tstamps[-1])
             # parse aco
             parsed_durs = tstamps_to_dur(parsed_tstamps[-1], True)
             aco_seq = read_aco_file(spk_name, split_id, aco_dir)
@@ -159,7 +164,7 @@ def read_speaker_labs(spk_name, ids_list, lab_dir, lab_parser,
         #                 np.mean(parse_timings)),
         #     end='\n')
         #beg_t = timeit.default_timer()
-    log_file.close()
+    #log_file.close()
     if aco_dir is None:
         return (spk_name, parsed_tstamps, parsed_lines, flat_lines)
     else:
@@ -202,7 +207,7 @@ def varlen_dur_collate(batch):
     # build the batches of spk_idx, labs and durs
     # each sample in batch is a sequence!
     spks = np.zeros((len(batch), max_seq_len), dtype=np.int64)
-    #print('batch[0][0][2] type: ', type(batch[0][0][2]))
+    #print('#batch[0][0][2] type: ', type(batch[0][0][2]))
     #print('np array dtype: ', batch[0][0][2].dtype)
     if batch[0][0][2].dtype == np.int64:
         #print('int64')
@@ -615,7 +620,7 @@ class TCSTAR_dur(TCSTAR):
                 else:
                     self.vec_sample.append(vec_seq)
                     self.phone_sample.append(phone_seq)
-            pickle.dump(all_durs, open('/tmp/durs.pickle', 'wb'))
+            #pickle.dump(all_durs, open('/tmp/durs.pickle', 'wb'))
         else:
             print('-' * 50)
             print('Encoding dur samples with max_seq_len {} and batch_size '
@@ -1033,7 +1038,7 @@ class TCSTAR_aco(TCSTAR):
             for vi, vseq in enumerate(self.vec_sample):
                 for vsample in vseq:
                     raw_aco.append(vsample[1])
-            np.save('/tmp/{}-aco.npy'.format(self.split), raw_aco)
+            #np.save('/tmp/{}-aco.npy'.format(self.split), raw_aco)
             if self.mulout:
                 # go over all speaker ids and trim to max amount of samples
                 for spkname, phsample in self.phone_sample.items():
