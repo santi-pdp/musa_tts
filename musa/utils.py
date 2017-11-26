@@ -308,3 +308,12 @@ def denorm_aco_preds_gtruth(preds, gtruths, spks, spk2acostats):
         gtruths[ii] = denorm_minmax(aco_i, aco_min, aco_max)
     return preds, gtruths
 
+def apply_pf(cc_pred, pf=1.04, n_feats=40):
+    assert len(cc_pred.shape) == 2, cc_pred.shape
+    pfs = [1.]
+    for n in range(1, n_feats):
+        pf_i = pf ** n
+        pfs.append(pf_i)
+        print('multiplying order {} by {}'.format(cc_pred[:, n], pf_i))
+    cc_pred[:, :n_feats] = cc_pred[:, :n_feats] * pfs
+    return cc_pred

@@ -268,7 +268,7 @@ def main(opts):
                     # 6 boolean factors
                 ling_feats_dim += 6
                 print('ling_feats_dim: ', ling_feats_dim)
-            # build a duration model ready to train
+            # build a duration model and load weights
             dur_model = sinout_duration(num_inputs=ling_feats_dim,
                                         num_outputs=1,
                                         emb_size=opts.dur_emb_size,
@@ -282,9 +282,7 @@ def main(opts):
             print('Loading duration model: ', opts.dur_weights)
             dur_model.load(opts.dur_weights)
             print('spk2durstats: ', json.dumps(spk2durstats, indent=2))
-            # TODO: load dur model weights
-            # build an acoustic model ready to train
-            # TODO: load aco model with weights
+            # build acoustic model and load weights
             aco_model = acoustic_rnn(num_inputs=ling_feats_dim + 2,
                                      #num_outputs=aco_outputs,
                                      emb_size=opts.aco_emb_size,
@@ -295,6 +293,7 @@ def main(opts):
                                      speakers=['73'],
                                      mulout=opts.aco_mulout,
                                      cuda=opts.cuda)
+            print(aco_model)
             print('Loading acoustic model: ',  opts.aco_weights)
             aco_model.load(opts.aco_weights)
             print('idx2spk: ', json.dumps(idx2spk, indent=2))
@@ -303,7 +302,7 @@ def main(opts):
             lab_bname, _ = os.path.splitext(lab_fname)
             synthesize(dur_model, aco_model, 1, spk2durstats, spk2acostats,
                        opts.save_path, lab_bname, opts.codebooks_dir, opts.synthesize_lab, 
-                       cuda=False)
+                       cuda=False, force_dur=opts.force_dur, pf=opts.pf)
 
 
 if __name__ == '__main__':
@@ -315,8 +314,11 @@ if __name__ == '__main__':
                         help='Lab filename to be synthesized')
     parser.add_argument('--codebooks_dir', type=str,
                         default='data/tcstar/codebooks.pkl')
+    parser.add_argument('--pf', type=float, default=0)
     parser.add_argument('--save_path', type=str, default='ckpt')
     parser.add_argument('--force-gen', action='store_true',
+                        default=False)
+    parser.add_argument('--force-dur', action='store_true',
                         default=False)
     parser.add_argument('--train-dur', action='store_true',
                         default=False,

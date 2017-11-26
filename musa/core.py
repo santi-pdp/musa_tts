@@ -2,7 +2,7 @@ import torch
 from torch.autograd import Variable
 import torch.nn.functional as F
 from .utils import *
-from .datasets.utils import label_parser, label_encoder
+from .datasets.utils import label_parser, label_encoder, tstamps_to_dur
 import numpy as np
 import struct
 import json
@@ -72,8 +72,9 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
 
 def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
                save_path, out_fname, codebooks, lab_file, ogmios_fmt=True, 
-               cuda=False):
+               cuda=False, force_dur=False, pf=0):
     dur_model.eval()
+    aco_model.eval()
     lab_parser = label_parser(ogmios_fmt=ogmios_fmt)
     lab_enc = label_encoder(codebooks_path=codebooks,
                             lab_data=None,
@@ -103,10 +104,21 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
 
     # TODO: add forced_dur option from labs?
     # predict dur
-    dur, _ = dur_model(lab_codes, None, spk_id)
     durstats = spk2durstats[spk_int]
     print('Selected spk {} durstats {}'.format(spk_id, 
-                                               json.dumps(durstats)))
+                                           json.dumps(durstats)))
+    if force_dur:
+        # use durs from lab file
+        print('tstamps: ', tstamps)
+        dur = Variable(torch.FloatTensor(tstamps_to_dur(tstamps, True)))
+        dur = dur.view(-1, 1, 1)
+        if cuda:
+            dur = cur.cuda()
+        print('dur: ', dur)
+    else:
+        # predict durs
+        dur, _ = dur_model(lab_codes, None, spk_id)
+
     # normalize durs
     ndurs = (dur - durstats['min']) / \
             (durstats['max'] - durstats['min'])
@@ -119,15 +131,16 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
         # go over all windows within this dur
         reldur_c = 0.
         dur_t = np.asscalar(dur[t, :, :].data.numpy())
-        print('dur_t: ', dur_t)
+        #print('dur_t: ', dur_t)
         while reldur_c < dur_t:
+            print('reldur_c: ', reldur_c)
             n_reldur = float(reldur_c) / dur_t
-            print('n_reldur: ', n_reldur)
+            #print('n_reldur: ', n_reldur)
             # every 5ms, shift. TODO: change hardcode to allow speed variation
             reldur_c += 0.005
-            print('lab_codes[t, 0, :].size()=', lab_codes[t, 0, :].size())
+            #print('lab_codes[t, 0, :].size()=', lab_codes[t, 0, :].size())
             aco_inputs.append(np.concatenate((lab_codes[t, 0, :].data.numpy(),
-                                             np.array([ndur, n_reldur]))))
+                                             np.array([n_reldur, ndur]))))
         #reldur = reldur_c / dur
         #aco_inputs
     print('aco_inputs len: ', len(aco_inputs))
@@ -145,21 +158,30 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
     acostats = spk2acostats[spk_int]
     min_aco = acostats['min']
     max_aco = acostats['max']
-    yt_npy = yt.cpu().data.numpy()
+    yt_npy = yt.cpu().data.squeeze(1).numpy()
     print('max acot: ', yt_npy.max())
     print('min acot: ', yt_npy.min())
     acot = denorm_minmax(yt_npy, min_aco, max_aco)
+    acot = apply_pf(acot, pf, n_feats=40)
     print('Post normalize')
     print('max acot: ', acot.max())
     print('min acot: ', acot.min())
+    print('stats min: ', min_aco)
+    print('stats max: ', max_aco)
     # TODO: save resulting acoustic predictions
     # delete batch dimension
-    acot = acot.squeeze(1)
+    #acot = acot.squeeze(1)
     print('acot shape: ', acot.shape)
     mfcc = acot[:, :40].reshape(-1).tolist()
     fv = acot[:, -3].reshape(-1)
     lf0 = acot[:, -2].reshape(-1)
-    uv = np.round(acot[:, -1].reshape(-1))
+    uv = acot[:, -1].reshape(-1)
+    print('uv min: ', uv.min())
+    print('uv max: ', uv.max())
+    uv = np.round(uv)
+    print('uv min: ', uv.min())
+    print('uv max: ', uv.max())
+    #np.save('{}/{}.uv'.format(save_path, out_fname), uv)
     fv[np.where(uv == 0)] = 1000.0
     lf0[np.where(uv == 0)] = -10000000000.0
     fv = fv.tolist()

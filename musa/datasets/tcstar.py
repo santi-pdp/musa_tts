@@ -126,7 +126,7 @@ def read_speaker_labs(spk_name, ids_list, lab_dir, lab_parser,
                     #print('ACCEPTED with dur: ', dur)
                     filtered_lab.append(plab)
                     filtered_tstamps.append(tss)
-                else:
+                #else:
                     #print('Filtered dur: ', dur)
                     #log_file.write('Filtred dur {} at file '
                     #               '{}.lab\n'.format(dur, 
