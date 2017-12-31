@@ -8,14 +8,17 @@ from .core import speaker_model
 class acoustic_rnn(speaker_model):
     """ acoustic RNN model """
 
-    def __init__(self, num_inputs, emb_size, rnn_size, rnn_layers,
-                 dropout, sigmoid_out=True, speakers=None,
+    def __init__(self, num_inputs, emb_size, 
+                 rnn_size, rnn_layers,
+                 dropout, emb_activation='Tanh',
+                 sigmoid_out=True, speakers=None,
                  mulspk_type='sinout',
                  mulout=False, cuda=False):
         super(acoustic_rnn, self).__init__(num_inputs, mulspk_type, 
                                            speakers=speakers,
                                            cuda=cuda)
         self.emb_size = emb_size
+        self.emb_activation = emb_activation
         self.rnn_size = rnn_size
         self.rnn_layers = rnn_layers
         #self.num_outputs = num_outputs

@@ -196,6 +196,7 @@ def main(opts):
                                  rnn_layers=opts.aco_rnn_layers,
                                  sigmoid_out=True,
                                  dropout=opts.aco_dout,
+                                 emb_activation=opts.emb_activation,
                                  speakers=model_spks,
                                  mulout=opts.aco_mulout,
                                  cuda=opts.cuda)
@@ -373,6 +374,7 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--seed', type=int, default=1991)
     parser.add_argument('--dur_lr', type=float, default=0.001)
+    parser.add_argument('--emb_activation', type=str, default='Tanh')
     parser.add_argument('--dur_max_seq_len', type=int, default=None)
     parser.add_argument('--aco_lr', type=float, default=0.001)
     parser.add_argument('--aco_max_seq_len', type=int, default=None)
