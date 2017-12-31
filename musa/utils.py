@@ -308,7 +308,7 @@ def denorm_aco_preds_gtruth(preds, gtruths, spks, spk2acostats):
         gtruths[ii] = denorm_minmax(aco_i, aco_min, aco_max)
     return preds, gtruths
 
-def apply_pf(cc_pred, pf=1.04, n_feats=40):
+def apply_pf(cc_pred, pf=1., n_feats=40):
     assert len(cc_pred.shape) == 2, cc_pred.shape
     pfs = [1.]
     for n in range(1, n_feats):

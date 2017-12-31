@@ -34,11 +34,15 @@ class speaker_model(nn.Module):
     def save(self, save_path, out_filename, epoch, best_val=False):
         if not os.path.exists(save_path):
             os.makedirs(save_path)
+        out_w_fpath = 'e{}_{}.weights'.format(epoch, out_filename)
         out_fpath = 'e{}_{}'.format(epoch, out_filename)
         if best_val:
             out_fpath = 'best-val_{}'.format(out_fpath)
+            out_w_fpath = 'best-val_{}'.format(out_w_fpath)
         out_fpath = os.path.join(save_path, out_fpath)
-        torch.save(self.state_dict(), out_fpath)
+        out_w_fpath = os.path.join(save_path, out_w_fpath)
+        torch.save(self.state_dict(), out_w_fpath)
+        torch.save(self, out_fpath)
 
     def load(self, model_file):
         self.load_state_dict(torch.load(model_file))

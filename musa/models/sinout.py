@@ -60,15 +60,20 @@ class acoustic_rnn(speaker_model):
                 y[spk], \
                 nout_state[spk] = self.out_layers[spk](x,
                                                        out_state[spk])
-                if self.sigmoid_out:
-                    y[spk] = F.sigmoid(y[spk])
+                # binary classifier output ([-1]) has to go through relu
+                # to bound within [0, 1] properly
+                y[spk][:, :, -1] = F.relu(y[spk][:, :, -1], inplace=True)
                 y[spk] = y[spk].view(dling_features.size(0), -1,
                                      self.num_outputs)
         else:
             y, nout_state = self.out_layer(x,
                                            out_state)
-            if self.sigmoid_out:
-                y = F.sigmoid(y)
+            # binary classifier output ([-1]) has to go through relu
+            # to bound within [0, 1] properly
+            lin = y[:, :, :-1]
+            cla = y[:, :, -1:]
+            y = torch.cat((lin, F.relu(cla)), dim=2)
+            #y[:, :, -1] = F.relu(y[:, :, -1], inplace=True)
             y = y.view(dling_features.size(0), -1, self.num_outputs)
         return y, hid_state, nout_state
 
