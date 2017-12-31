@@ -72,7 +72,7 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
 
 def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
                save_path, out_fname, codebooks, lab_file, ogmios_fmt=True, 
-               cuda=False, force_dur=False, pf=0):
+               cuda=False, force_dur=False, pf=1):
     dur_model.eval()
     aco_model.eval()
     lab_parser = label_parser(ogmios_fmt=ogmios_fmt)
@@ -115,13 +115,17 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
         if cuda:
             dur = cur.cuda()
         print('dur: ', dur)
+        # normalize durs
+        ndurs = (dur - durstats['min']) / \
+                (durstats['max'] - durstats['min'])
     else:
         # predict durs
-        dur, _ = dur_model(lab_codes, None, spk_id)
+        ndurs, _ = dur_model(lab_codes, None, spk_id)
+        min_dur = durstats['min']
+        max_dur = durstats['max']
+        dur = ndurs * min_dur - max_dur + min_dur
+        print('predicted dur: ', dur)
 
-    # normalize durs
-    ndurs = (dur - durstats['min']) / \
-            (durstats['max'] - durstats['min'])
     print('ndur size: ', ndurs.size())
     # build acoustic batch
     aco_inputs = []
@@ -145,7 +149,9 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
         #aco_inputs
     print('aco_inputs len: ', len(aco_inputs))
     aco_seqlen = len(aco_inputs)
-    aco_inputs = Variable(torch.FloatTensor(aco_inputs)).view(aco_seqlen, 1, -1)
+    aco_inputs = Variable(torch.FloatTensor(aco_inputs))
+    print('aco_inputs size: ', aco_inputs.size())
+    aco_inputs = aco_inputs.view(aco_seqlen, 1, -1)
     print('aco_inputs size: ', aco_inputs.size())
     if cuda:
         aco_inputs = aco_inputs.cuda()

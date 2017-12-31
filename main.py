@@ -239,8 +239,8 @@ def main(opts):
                      cuda=opts.cuda,
                      va_opts=va_opts)
     if opts.synthesize_lab is not None:
-        if opts.dur_weights is None or opts.aco_weights is None:
-            raise ValueError('Please specify dur_weights and aco_weights in '
+        if opts.dur_model is None or opts.aco_weights is None:
+            raise ValueError('Please specify dur_model and aco_weights in '
                              'synthesis mode.')
         with open(opts.cfg_spk, 'rb') as cfg_f:
             cfg = pickle.load(cfg_f)
@@ -268,19 +268,22 @@ def main(opts):
                     # 6 boolean factors
                 ling_feats_dim += 6
                 print('ling_feats_dim: ', ling_feats_dim)
+            dur_model = torch.load(opts.dur_model)
+
             # build a duration model and load weights
-            dur_model = sinout_duration(num_inputs=ling_feats_dim,
-                                        num_outputs=1,
-                                        emb_size=opts.dur_emb_size,
-                                        rnn_size=opts.dur_rnn_size,
-                                        rnn_layers=opts.dur_rnn_layers,
-                                        sigmoid_out=True,
-                                        dropout=opts.dur_dout,
-                                        speakers=None,
-                                        mulout=opts.dur_mulout,
-                                        cuda=opts.cuda)
-            print('Loading duration model: ', opts.dur_weights)
-            dur_model.load(opts.dur_weights)
+            #dur_model = sinout_duration(num_inputs=ling_feats_dim,
+            #                            num_outputs=1,
+            #                            emb_size=opts.dur_emb_size,
+            #                            rnn_size=opts.dur_rnn_size,
+            #                            rnn_layers=opts.dur_rnn_layers,
+            #                            sigmoid_out=opts.sigmoid_dur,
+            #                            dropout=opts.dur_dout,
+            #                            speakers=None,
+            #                            mulout=opts.dur_mulout,
+            #                            cuda=opts.cuda)
+            #print('Loading duration model: ', opts.dur_weights)
+            print('Loaded duration model: ', dur_model)
+            #dur_model.load(opts.dur_weights)
             print('spk2durstats: ', json.dumps(spk2durstats, indent=2))
             # build acoustic model and load weights
             aco_model = acoustic_rnn(num_inputs=ling_feats_dim + 2,
@@ -314,7 +317,7 @@ if __name__ == '__main__':
                         help='Lab filename to be synthesized')
     parser.add_argument('--codebooks_dir', type=str,
                         default='data/tcstar/codebooks.pkl')
-    parser.add_argument('--pf', type=float, default=0)
+    parser.add_argument('--pf', type=float, default=1)
     parser.add_argument('--save_path', type=str, default='ckpt')
     parser.add_argument('--force-gen', action='store_true',
                         default=False)
@@ -343,8 +346,10 @@ if __name__ == '__main__':
                              'If specified, this will triger '
                              'quantization in dloader and softmax '
                              'output for the model (Def: None).')
-    parser.add_argument('--dur_weights', type=str, default=None,
-                        help='Trained dur model weights')
+    #parser.add_argument('--dur_weights', type=str, default=None,
+    #                    help='Trained dur model weights')
+    parser.add_argument('--dur_model', type=str, default=None,
+                        help='Trained dur model')
     parser.add_argument('--aco_weights', type=str, default=None,
                         help='Trained aco model weights')
     parser.add_argument('--aco_q_classes', type=int, default=None,
