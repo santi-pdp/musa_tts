@@ -6,12 +6,12 @@ if [ $# -lt 4 ]; then
 fi
 LAB_FILE="$1"
 SAVE_PATH="$2"
-DUR_WEIGHTS="$3"
+DUR_MODEL="$3"
 ACO_WEIGHTS="$4"
-ACO_DATA="$5"
+# ACO_DATA="$5"
 
 python main.py --synthesize_lab $LAB_FILE --save_path $SAVE_PATH \
-	--dur_weights $DUR_WEIGHTS --aco_weights $ACO_WEIGHTS --force-dur --pf 1
+	--dur_model $DUR_MODEL --aco_weights $ACO_WEIGHTS --pf 1 --force-dur
 	#--aco_emb_size 256 --aco_rnn_layers 2 --aco_rnn_size 512  # --force-dur --aco_lab_norm znorm
 
 LAB_FNAME=${LAB_FILE##*/}
