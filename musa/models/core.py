@@ -66,22 +66,22 @@ class speaker_model(nn.Module):
         if not self.gating:
             # first embedding layer is not fused at beginig
             self.emb_fc = nn.Sequential(
-                nn.Tanh(),
+                getattr(nn, self.emb_activation)(),
                 nn.Linear(self.emb_size, self.emb_size),
                 nn.Dropout(self.dropout),
-                nn.Tanh()
+                getattr(nn, self.emb_activation)(),
             )
         else:
             # create gated trunk (from very beginning)
             self.emb_fc = [
                 nn.Sequential(
                     nn.Linear(self.num_inputs, self.emb_size),
-                    nn.Tanh(),
+                    getattr(nn, self.emb_activation)(),
                 ),
                 nn.Sequential(
                     nn.Linear(self.emb_size, self.emb_size),
                     nn.Dropout(self.dropout),
-                    nn.Tanh()
+                    getattr(nn, self.emb_activation)(),
                 )
             ]
             self.emb_g = [
