@@ -30,6 +30,15 @@ def repackage_hidden(h, curr_bsz):
     else:
         return tuple(repackage_hidden(v, curr_bsz).contiguous() for v in h)
 
+def write_scalar_log(val, tag, step, log_writer=None):
+    if log_writer is not None:
+        log_writer.add_scalar(tag, val, step)
+
+def write_histogram_log(val, tag, step, log_writer=None):
+    if log_writer is not None:
+        log_writer.add_histogram(tag, val, step, bins='sturges')
+
+
 def rmse(prediction, groundtruth, spks=None, idx2spk=None):
     assert prediction.shape == groundtruth.shape
     # global
