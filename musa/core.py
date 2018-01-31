@@ -690,14 +690,15 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     print('Evaluated aco W/O sil phones ({}) F0 mRMSE [Hz]:'
           '{:.2f}'.format(sil_id, nosil_aco_f0_rmse))
     write_scalar_log(nosil_aco_f0_rmse, 
-                     'nosil_aco_f0_rmse [Hz]',
+                     'total_no-silence_F0_rmse_Hz',
                      epoch_idx, log_writer)
     print('Evaluated aco F0 mRMSE of spks: '
           '{}'.format(json.dumps(nosil_aco_f0_spk,
                                  indent=2)))
-    for k, v in nosil_aco_f0_spk.items():
-        write_scalar_log(v, 'nosil_aco_f0_{}'.format(k),
-                         epoch_idx, log_writer)
+    if len(nosil_aco_f0_spk) > 1:
+        for k, v in nosil_aco_f0_spk.items():
+            write_scalar_log(v, '{}_no-silence_F0_rmse_Hz'.format(k),
+                             epoch_idx, log_writer)
     print('========= MCD =========')
     print('Evaluated aco W/O sil phones ({}) MCD [dB]:'
           '{:.3f}'.format(sil_id, nosil_aco_mcd['total']))
