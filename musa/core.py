@@ -670,16 +670,40 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     #print('Evaluated aco F0 mRMSE [Hz]: {:.2f}'.format(aco_f0_rmse))
     masked_f0_preds = np.exp(preds[:, -2]).reshape(-1, 1) * sil_mask
     masked_f0_gtruths = np.exp(gtruths[:, -2]).reshape(-1, 1) * sil_mask
+    write_histogram_log(np.exp(preds[:, -2]),
+                        'F0 predictions',
+                        epoch_idx, log_writer)
+    write_histogram_log(np.exp(gtruths[:, -2]),
+                        'F0 groundtruth',
+                        epoch_idx, log_writer)
     nosil_aco_f0_rmse, \
     nosil_aco_f0_spk = rmse(masked_f0_preds,
                             masked_f0_gtruths,
                             spks, idx2spk)
+    write_histogram_log(preds[:, :40],
+                        'MFCC predictions',
+                        epoch_idx, log_writer)
+    write_histogram_log(gtruths[:, :40],
+                        'MFCC groundtruth',
+                        epoch_idx, log_writer)
     masked_cc_preds = preds[:, :40] * sil_mask
     masked_cc_gtruths = gtruths[:, :40] * sil_mask
     nosil_aco_mcd = mcd(masked_cc_preds, masked_cc_gtruths,
                         spks, idx2spk)
+    write_histogram_log(preds[:, -1],
+                        'U/V predictions',
+                        epoch_idx, log_writer)
+    write_histogram_log(gtruths[:, -1],
+                        'U/V groundtruth',
+                        epoch_idx, log_writer)
     masked_uv_preds = np.round(preds[:, -1]).reshape(-1, 1) * sil_mask
     masked_uv_gtruths = gtruths[:, -1].reshape(-1, 1) * sil_mask
+    write_histogram_log(preds[:, -3],
+                        'FV predictions',
+                        epoch_idx, log_writer)
+    write_histogram_log(gtruths[:, -3],
+                        'FV groundtruth',
+                        epoch_idx, log_writer)
     #print('masked_uv_preds shape: ', masked_uv_preds.shape)
     #print('masked_uv_gtruths shape: ', masked_uv_gtruths.shape)
     nosil_aco_afpr = afpr(masked_uv_preds, masked_uv_gtruths,
