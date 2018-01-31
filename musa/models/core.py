@@ -64,13 +64,27 @@ class speaker_model(nn.Module):
     def build_input_embedding(self):
         # two-layer tanh embedding projections
         if not self.gating:
+            from collections import OrderedDict
+            emb_fc_d = OrderedDict()
+            emb_fc_d['act_0'] = getattr(nn, self.emb_activation)()
+            if self.bnorm:
+                emb_fc_d['bnorm_0'] = nn.BatchNorm1d(self.emb_size)
+            for n in range(self.emb_layers - 1):
+                emb_fc_d['fc_{}'.format(n + 1)] = nn.Linear(self.emb_size,
+                                                             self.emb_size)
+                emb_fc_d['dout_{}'.format(n + 1)] = nn.Dropout(self.dropout)
+                emb_fc_d['act_{}'.format(n + 1)] = getattr(nn, self.emb_activation)()
+                if self.bnorm:
+                    emb_fc_d['bnorm_{}'.format(n + 1)] = nn.BatchNorm1d(self.emb_size)
+            self.emb_fc = nn.Sequential(emb_fc_d)
+
             # first embedding layer is not fused at beginig
-            self.emb_fc = nn.Sequential(
-                getattr(nn, self.emb_activation)(),
-                nn.Linear(self.emb_size, self.emb_size),
-                nn.Dropout(self.dropout),
-                getattr(nn, self.emb_activation)(),
-            )
+            #self.emb_fc = nn.Sequential(
+            #    getattr(nn, self.emb_activation)(),
+            #    nn.Linear(self.emb_size, self.emb_size),
+            #    nn.Dropout(self.dropout),
+            #    getattr(nn, self.emb_activation)(),
+            #)
         else:
             # create gated trunk (from very beginning)
             self.emb_fc = [

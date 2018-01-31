@@ -13,15 +13,18 @@ class acoustic_rnn(speaker_model):
                  dropout, emb_activation='Tanh',
                  sigmoid_out=True, speakers=None,
                  mulspk_type='sinout',
-                 mulout=False, cuda=False):
+                 mulout=False, cuda=False,
+                 bnorm=False,
+                 emb_layers=4):
         super(acoustic_rnn, self).__init__(num_inputs, mulspk_type, 
                                            speakers=speakers,
                                            cuda=cuda)
         self.emb_size = emb_size
+        self.emb_layers = emb_layers
         self.emb_activation = emb_activation
         self.rnn_size = rnn_size
         self.rnn_layers = rnn_layers
-        #self.num_outputs = num_outputs
+        self.bnorm = bnorm
         self.num_outputs = 43
         self.dropout = dropout
         self.sigmoid_out = sigmoid_out
