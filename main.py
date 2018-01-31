@@ -356,8 +356,8 @@ if __name__ == '__main__':
     parser.add_argument('--dur_rnn_size', type=int, default=256)
     parser.add_argument('--dur_rnn_layers', type=int, default=1)
     parser.add_argument('--dur_emb_size', type=int, default=256)
-    parser.add_argument('--aco_rnn_size', type=int, default=256)
-    parser.add_argument('--aco_rnn_layers', type=int, default=1)
+    parser.add_argument('--aco_rnn_size', type=int, default=512)
+    parser.add_argument('--aco_rnn_layers', type=int, default=2)
     parser.add_argument('--aco_emb_size', type=int, default=256)
     parser.add_argument('--dur_q_classes', type=int, default=None,
                         help='Num of clusters in dur quantization. '
