@@ -12,7 +12,8 @@ import os
 def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
                  epochs, save_path, model_savename, tr_opts={}, eval_fn=None, 
                  val_dloader=None, eval_stats=None, eval_target=None, 
-                 eval_patience=None, cuda=False, va_opts={}):
+                 eval_patience=None, cuda=False, va_opts={}, log_writer=None,
+                 opt_scheduler=None):
     tr_loss = {}
     va_loss = {}
     min_va_loss = np.inf
@@ -21,7 +22,8 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
         best_model = False
         tr_e_loss = train_fn(model, dloader, opt, log_freq, epoch,
                              criterion=train_criterion,
-                             cuda=cuda, tr_opts=tr_opts.copy())
+                             cuda=cuda, tr_opts=tr_opts.copy(),
+                             log_writer=log_writer)
         for k, v in tr_e_loss.items():
             if k not in tr_loss:
                 tr_loss[k] = [v]
@@ -34,7 +36,8 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
             val_scores = eval_fn(model, val_dloader, 
                                  epoch, cuda=cuda,
                                  stats=eval_stats,
-                                 va_opts=va_opts.copy())
+                                 va_opts=va_opts.copy(),
+                                 log_writer=log_writer)
             if eval_target:
                 if eval_patience is None:
                     raise ValueError('Train engine: Need a patience '
@@ -45,6 +48,8 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
                         va_loss[k] = [v]
                     else:
                         va_loss[k].append(v)
+                if opt_scheduler is not None:
+                    opt_scheduler.step(val_scores[eval_target])
                 # we have a target key to do early stopping upon it
                 if val_scores[eval_target] < min_va_loss:
                     print('Val loss improved {:.3f} -> {:.3f}'
@@ -73,7 +78,8 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
 def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
                save_path, out_fname, codebooks, lab_file, ogmios_fmt=True, 
                cuda=False, force_dur=False, pf=1):
-    dur_model.eval()
+    if not force_dur:
+        dur_model.eval()
     aco_model.eval()
     lab_parser = label_parser(ogmios_fmt=ogmios_fmt)
     lab_enc = label_encoder(codebooks_path=codebooks,
@@ -215,10 +221,11 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
 
 def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
                     criterion=None, cuda=False, tr_opts={},
-                    spk2acostats=None):
+                    spk2acostats=None, log_writer=None):
     # When mulout is True (MO), log_freq is per round, not batch
     # note that a round will have N batches
     model.train()
+    global_step = epoch_idx * len(dloader)
     # At the moment, acoustic training is always stateful
     spk2acostats = None
     if 'spk2acostats' in tr_opts:
@@ -247,6 +254,7 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
         # keep track of the losses per round to make a proper log
         # when MO is running 
         spk_loss_batch = {}
+
     for b_idx, batch in enumerate(dloader):
         # decompose the batch into the sub-batches
         spk_b, lab_b, aco_b, slen_b, ph_b = batch
@@ -257,21 +265,19 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
         spk_b = Variable(spk_b).transpose(0,1).contiguous()
         spk_name = idx2spk[spk_b.data[0,0]]
         lab_b = Variable(lab_b).transpose(0,1).contiguous()
-        #for t in range(25):
-        #    print('{} -> dur: {}, reldur: {}'.format(t+1,
-        #                                            np.asscalar(lab_b[t, 0, -2].data.numpy()),
-        #                                            np.asscalar(lab_b[t, 0, -1].data.numpy())))
         aco_b = Variable(aco_b).transpose(0,1).contiguous()
         slen_b = Variable(slen_b)
         # get curr batch size
         curr_bsz = spk_b.size(1)
         if spk_name not in spk2hid_states:
+            # initialize hidden states for this (hidden and out) speaker
+            #print('Initializing states of spk ', spk_name)
             hid_state = model.init_hidden_state(curr_bsz)
             out_state = model.init_output_state(curr_bsz)
-            #print('Initializing states of spk ', spk_name)
         else:
             #print('Fetching mulout states of spk ', spk_name)
-            # select last spks state in the MO dict
+            # select last spks state in the MO dict and repackage
+            # to not backprop the gradients infinite in time
             hid_state = spk2hid_states[spk_name]
             out_state = spk2out_states[spk_name]
             hid_state = repackage_hidden(hid_state, curr_bsz)
@@ -362,6 +368,8 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
                     if loss_mo_name not in epoch_losses:
                         epoch_losses[loss_mo_name] = []
                     epoch_losses[loss_mo_name].append(moloss)
+                    write_scalar_log(moloss, loss_mo_name,
+                                     global_step, log_writer)
                 log_mesg = log_mesg[:-1] + ')'
             else:
                 log_mesg += ' loss {:.5f}'.format(loss.data[0])
@@ -372,9 +380,14 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
                     if nosil_aco_mcd:
                         epoch_losses['tr_mcd'] = []
                 epoch_losses['tr_loss'].append(loss.data[0])
+                write_scalar_log(loss.data[0], 'tr_loss',
+                                 global_step, log_writer)
                 if nosil_aco_mcd:
                     epoch_losses['tr_mcd'].append(nosil_aco_mcd)
+                    write_scalar_log(nosil_aco_mcd, 'tr_mcd',
+                                     global_step, log_writer)
             print(log_mesg)
+        global_step += 1
     end_log = '-- Finished epoch {:4d}, mean losses:'.format(epoch_idx)
     if isinstance(epoch_losses, dict):
         for k, val in epoch_losses.items():
@@ -385,7 +398,7 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
 
 def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
                     criterion=None, cuda=False, tr_opts={},
-                    spk2durstats=None):
+                    spk2durstats=None, log_writer=None):
     # When mulout is True (MO), log_freq is per round, not batch
     # note that a round will have N batches
     model.train()
@@ -541,7 +554,7 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
     return epoch_losses
 
 def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
-                   stats=None, va_opts={}):
+                   stats=None, va_opts={}, log_writer=None):
     model.eval()
     sil_id = 'pau'
     if 'sil_id' in va_opts:
@@ -676,26 +689,51 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     print('========= F0 RMSE =========')
     print('Evaluated aco W/O sil phones ({}) F0 mRMSE [Hz]:'
           '{:.2f}'.format(sil_id, nosil_aco_f0_rmse))
+    write_scalar_log(nosil_aco_f0_rmse, 
+                     'nosil_aco_f0_rmse [Hz]',
+                     epoch_idx, log_writer)
     print('Evaluated aco F0 mRMSE of spks: '
           '{}'.format(json.dumps(nosil_aco_f0_spk,
                                  indent=2)))
+    for k, v in nosil_aco_f0_spk.items():
+        write_scalar_log(v, 'nosil_aco_f0_{}'.format(k),
+                         epoch_idx, log_writer)
     print('========= MCD =========')
     print('Evaluated aco W/O sil phones ({}) MCD [dB]:'
           '{:.3f}'.format(sil_id, nosil_aco_mcd['total']))
+    write_scalar_log(nosil_aco_mcd['total'],
+                     'total_MCD_dB',
+                     epoch_idx, log_writer)
     #print('Evaluated w/ sil MCD of spks: {}'.format(json.dumps(aco_mcd,
     #                                                           indent=2)))
     print('Evaluated W/O sil MCD of spks: {}'.format(json.dumps(nosil_aco_mcd,
                                                                 indent=2)))
+    if len(nosil_aco_mcd) > 2:
+        # will print all speakers
+        for k, v in nosil_aco_mcd.items():
+            if k == 'total':
+                continue
+            write_scalar_log(v,
+                             'MCD_spk{}_dB'.format(k),
+                             epoch_idx, log_writer)
     print('========= Acc =========')
     #print('Evaluated aco AFPR [norm]: '.format(aco_afpr['A.total']))
     print('Evaluated W/O sil phones ({}) Acc [norm]:'
           '{}'.format(sil_id, nosil_aco_afpr['A.total']))
+    write_scalar_log(nosil_aco_afpr['A.total'], 'Total Accuracy',
+                     epoch_idx, log_writer)
     print('Evaluated W/O sil phones ({}) P [norm]:'
           '{}'.format(sil_id, nosil_aco_afpr['P.total']))
+    write_scalar_log(nosil_aco_afpr['P.total'], 'Total Precision',
+                     epoch_idx, log_writer)
     print('Evaluated W/O sil phones ({}) R [norm]:'
           '{}'.format(sil_id, nosil_aco_afpr['R.total']))
+    write_scalar_log(nosil_aco_afpr['R.total'], 'Total Recall',
+                     epoch_idx, log_writer)
     print('Evaluated W/O sil phones ({}) F1 [norm]:'
           '{}'.format(sil_id, nosil_aco_afpr['F.total']))
+    write_scalar_log(nosil_aco_afpr['F.total'], 'total F1',
+                     epoch_idx, log_writer)
     print('=' * 30)
     #print('Evaluated w/ sil MCD of spks: {}'.format(json.dumps(aco_mcd,
     #                                                           indent=2)))
@@ -739,7 +777,7 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     return new_keys_d
 
 def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
-                   stats=None, va_opts={}):
+                   stats=None, va_opts={}, log_writer=None):
     model.eval()
     sil_id = 'pau'
     q_classes = False

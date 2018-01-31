@@ -2,6 +2,8 @@ import argparse
 from musa.datasets import *
 from musa.models import *
 from torch.utils.data import DataLoader
+from tensorboardX import SummaryWriter
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch.optim as optim
 from musa.core import *
 import random
@@ -82,7 +84,9 @@ def main(opts):
                                     speakers=model_spks,
                                     mulout=opts.dur_mulout,
                                     cuda=opts.cuda)
-        opti = optim.RMSprop(dur_model.parameters(), lr=opts.dur_lr)
+        opti = getattr(optim, opts.dur_optim)(dur_model.parameters(),
+                                          lr=opts.dur_lr)
+        #opti = optim.RMSprop(dur_model.parameters(), lr=opts.dur_lr)
         if opts.cuda:
             dur_model.cuda()
         print('*' * 30)
@@ -140,7 +144,7 @@ def main(opts):
                           q_classes=opts.aco_q_classes,
                           trim_to_min=True,
                           forced_trim=opts.aco_train_forced_trim,
-                          norm_aco=True,
+                          norm_aco=opts.norm_aco,
                           exclude_train_spks=opts.exclude_train_spks)
         # can be dur norm or kmeans data
         spk2acostats = dset.spk2acostats
@@ -169,7 +173,7 @@ def main(opts):
                               q_classes=opts.aco_q_classes,
                               trim_to_min=True,
                               forced_trim=opts.aco_valid_forced_trim,
-                              norm_aco=True,
+                              norm_aco=opts.norm_aco,
                               exclude_eval_spks=opts.exclude_eval_spks)
         if opts.aco_mulout:
             va_sampler = MOSampler(val_dset.len_by_spk(), val_dset, opts.batch_size)
@@ -194,13 +198,21 @@ def main(opts):
                                  emb_size=opts.aco_emb_size,
                                  rnn_size=opts.aco_rnn_size,
                                  rnn_layers=opts.aco_rnn_layers,
-                                 sigmoid_out=True,
+                                 sigmoid_out=False,
                                  dropout=opts.aco_dout,
                                  emb_activation=opts.emb_activation,
                                  speakers=model_spks,
                                  mulout=opts.aco_mulout,
-                                 cuda=opts.cuda)
-        opti = optim.Adam(aco_model.parameters(), lr=opts.aco_lr)
+                                 cuda=opts.cuda,
+                                 bnorm=opts.aco_bnorm)
+        #opti = optim.Adam(aco_model.parameters(), lr=opts.aco_lr)
+        opti = getattr(optim, opts.aco_optim)(aco_model.parameters(),
+                                              lr=opts.aco_lr)
+        sched = None
+        if opts.aco_optim == 'SGD':
+            sched = ReduceLROnPlateau(opti, 'min', factor=0.33,
+                                      patience=opts.patience,
+                                      verbose=True)
         if opts.cuda:
             aco_model.cuda()
         print('*' * 30)
@@ -225,6 +237,8 @@ def main(opts):
         if opts.aco_mulout:
             tr_opts['mulout'] = True
             va_opts['mulout'] = True
+        writer = SummaryWriter(os.path.join(opts.save_path,
+                                            'train'))
         # TODO: finish engine methods to train/eval acoustic model
         train_engine(aco_model, dloader, opti, opts.log_freq, train_aco_epoch,
                      criterion,
@@ -238,10 +252,12 @@ def main(opts):
                      eval_target='total_nosil_aco_mcd',
                      eval_patience=opts.patience,
                      cuda=opts.cuda,
-                     va_opts=va_opts)
+                     va_opts=va_opts,
+                     log_writer=writer,
+                     opt_scheduler=sched)
     if opts.synthesize_lab is not None:
-        if opts.dur_model is None or opts.aco_weights is None:
-            raise ValueError('Please specify dur_model and aco_weights in '
+        if opts.dur_model is None or opts.aco_model is None:
+            raise ValueError('Please specify dur_model and aco_model in '
                              'synthesis mode.')
         with open(opts.cfg_spk, 'rb') as cfg_f:
             cfg = pickle.load(cfg_f)
@@ -287,19 +303,20 @@ def main(opts):
             #dur_model.load(opts.dur_weights)
             print('spk2durstats: ', json.dumps(spk2durstats, indent=2))
             # build acoustic model and load weights
-            aco_model = acoustic_rnn(num_inputs=ling_feats_dim + 2,
-                                     #num_outputs=aco_outputs,
-                                     emb_size=opts.aco_emb_size,
-                                     rnn_size=opts.aco_rnn_size,
-                                     rnn_layers=opts.aco_rnn_layers,
-                                     sigmoid_out=True,
-                                     dropout=opts.aco_dout,
-                                     speakers=['73'],
-                                     mulout=opts.aco_mulout,
-                                     cuda=opts.cuda)
+            aco_model = torch.load(opts.aco_model)
+#            aco_model = acoustic_rnn(num_inputs=ling_feats_dim + 2,
+#                                     #num_outputs=aco_outputs,
+#                                     emb_size=opts.aco_emb_size,
+#                                     rnn_size=opts.aco_rnn_size,
+#                                     rnn_layers=opts.aco_rnn_layers,
+#                                     sigmoid_out=True,
+#                                     dropout=opts.aco_dout,
+#                                     speakers=['73'],
+#                                     mulout=opts.aco_mulout,
+#                                     cuda=opts.cuda)
             print(aco_model)
-            print('Loading acoustic model: ',  opts.aco_weights)
-            aco_model.load(opts.aco_weights)
+            print('Loading acoustic model: ',  opts.aco_model)
+            #aco_model.load(opts.aco_model)
             print('idx2spk: ', json.dumps(idx2spk, indent=2))
             # get lab file basename
             lab_fname = os.path.basename(opts.synthesize_lab)
@@ -351,8 +368,10 @@ if __name__ == '__main__':
     #                    help='Trained dur model weights')
     parser.add_argument('--dur_model', type=str, default=None,
                         help='Trained dur model')
-    parser.add_argument('--aco_weights', type=str, default=None,
-                        help='Trained aco model weights')
+    parser.add_argument('--aco_model', type=str, default=None,
+                        help='Trained aco model')
+    #parser.add_argument('--aco_weights', type=str, default=None,
+    #                    help='Trained aco model weights')
     parser.add_argument('--aco_q_classes', type=int, default=None,
                         help='Num of clusters in aco quantization. '
                              'If specified, this will triger '
@@ -374,9 +393,13 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--seed', type=int, default=1991)
     parser.add_argument('--dur_lr', type=float, default=0.001)
+    parser.add_argument('--dur_optim', type=str, default='RMSprop')
+    parser.add_argument('--aco_optim', type=str, default='SGD')
     parser.add_argument('--emb_activation', type=str, default='Tanh')
+    parser.add_argument('--norm-aco', default=False, action='store_true')
     parser.add_argument('--dur_max_seq_len', type=int, default=None)
-    parser.add_argument('--aco_lr', type=float, default=0.001)
+    parser.add_argument('--aco_lr', type=float, default=1)
+    parser.add_argument('--aco_bnorm', action='store_true', default=False)
     parser.add_argument('--aco_max_seq_len', type=int, default=None)
     parser.add_argument('--loader_workers', type=int, default=2)
     parser.add_argument('--parser_workers', type=int, default=4)
