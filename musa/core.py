@@ -3,7 +3,14 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 from .utils import *
 from .datasets.utils import label_parser, label_encoder, tstamps_to_dur
+try:
+    import ahoproc_tools
+    from ahoproc_tools.io import *
+except ImportError:
+    ahoproc_tools = None
+from scipy.io import wavfile
 import numpy as np
+import tempfile
 import struct
 import json
 import os
@@ -760,6 +767,30 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
     write_scalar_log(nosil_aco_afpr['F.total'], 'total F1',
                      epoch_idx, log_writer)
     print('=' * 30)
+    # WRITE AUDIO TO TBOARD if possible
+    if log_writer is not None:
+        tfl = tempfile.NamedTemporaryFile()
+        cc = preds[:, :40]
+        fv = preds[:, -3]
+        lf0 = preds[:, -2]
+        write_aco_file('{}.cc'.format(tfl.name), cc)
+        write_aco_file('{}.fv'.format(tfl.name), fv)
+        write_aco_file('{}.lf0'.format(tfl.name), lf0)
+        aco2wav('{}'.format(tfl.name))
+        rate, wav = wavfile.read('{}.wav'.format(tfl.name))
+        # norm in wav
+        wav = np.array(wav, dtype=np.float32) / 32767.
+        # trim to max of 10 seconds
+        wav = wav[:int(rate * 10)]
+        log_writer.add_audio('eval_synth_audio',
+                             wav,
+                             epoch_idx,
+                             sample_rate=rate)
+        # remove tmp files
+        os.unlink('{}.cc'.format(tfl.name))
+        os.unlink('{}.fv'.format(tfl.name))
+        os.unlink('{}.lf0'.format(tfl.name))
+        os.unlink('{}.wav'.format(tfl.name))
     #print('Evaluated w/ sil MCD of spks: {}'.format(json.dumps(aco_mcd,
     #                                                           indent=2)))
     #print('Evaluated w/o sil MCD of spks: {}'.format(json.dumps(nosil_aco_mcd,
