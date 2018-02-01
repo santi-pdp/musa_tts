@@ -781,7 +781,7 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
         # norm in wav
         wav = np.array(wav, dtype=np.float32) / 32767.
         # trim to max of 10 seconds
-        wav = wav[:int(rate * 10)]
+        wav = wav[:min(wav.shape[0], int(rate * 10))]
         log_writer.add_audio('eval_synth_audio',
                              wav,
                              epoch_idx,
