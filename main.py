@@ -286,42 +286,23 @@ def main(opts):
                 ling_feats_dim += 6
                 print('ling_feats_dim: ', ling_feats_dim)
             if not opts.force_dur:
+                print('-' * 30)
+                print('Loading duration model: ', opts.dur_model)
                 dur_model = torch.load(opts.dur_model, 
                                        map_location=lambda storage, loc: storage)
-                print('Loaded duration model: ', dur_model)
+                print('[*] Loaded')
             else:
+                print('[!] Dur model NOT loaded')
                 dur_model = None
-            # build a duration model and load weights
-            #dur_model = sinout_duration(num_inputs=ling_feats_dim,
-            #                            num_outputs=1,
-            #                            emb_size=opts.dur_emb_size,
-            #                            rnn_size=opts.dur_rnn_size,
-            #                            rnn_layers=opts.dur_rnn_layers,
-            #                            sigmoid_out=opts.sigmoid_dur,
-            #                            dropout=opts.dur_dout,
-            #                            speakers=None,
-            #                            mulout=opts.dur_mulout,
-            #                            cuda=opts.cuda)
-            #print('Loading duration model: ', opts.dur_weights)
-            #dur_model.load(opts.dur_weights)
-            print('spk2durstats: ', json.dumps(spk2durstats, indent=2))
+            print('>> spk2durstats: ', json.dumps(spk2durstats, indent=2))
             # build acoustic model and load weights
+            print('-' * 30)
+            print('Loading acoustic model: ', opts.aco_model)
             aco_model = torch.load(opts.aco_model,
                                    map_location=lambda storage, loc: storage)
-#            aco_model = acoustic_rnn(num_inputs=ling_feats_dim + 2,
-#                                     #num_outputs=aco_outputs,
-#                                     emb_size=opts.aco_emb_size,
-#                                     rnn_size=opts.aco_rnn_size,
-#                                     rnn_layers=opts.aco_rnn_layers,
-#                                     sigmoid_out=True,
-#                                     dropout=opts.aco_dout,
-#                                     speakers=['73'],
-#                                     mulout=opts.aco_mulout,
-#                                     cuda=opts.cuda)
-            print(aco_model)
-            print('Loading acoustic model: ',  opts.aco_model)
+            print('[*] Loaded')
             #aco_model.load(opts.aco_model)
-            print('idx2spk: ', json.dumps(idx2spk, indent=2))
+            print('>> idx2spk: ', json.dumps(idx2spk, indent=2))
             if opts.cuda:
                 aco_model.cuda()
                 if not opts.force_dur:
@@ -329,7 +310,7 @@ def main(opts):
             # get lab file basename
             lab_fname = os.path.basename(opts.synthesize_lab)
             lab_bname, _ = os.path.splitext(lab_fname)
-            synthesize(dur_model, aco_model, 1, spk2durstats, spk2acostats,
+            synthesize(dur_model, aco_model, opts.spk_id, spk2durstats, spk2acostats,
                        opts.save_path, lab_bname, opts.codebooks_dir, opts.synthesize_lab, 
                        cuda=opts.cuda, force_dur=opts.force_dur, pf=opts.pf)
 
@@ -337,6 +318,7 @@ def main(opts):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--cfg_spk', type=str, default='cfg/tcstar.cfg')
+    parser.add_argument('--spk_id', type=int, default=0)
     parser.add_argument('--lab_dir', type=str, default='data/tcstar/lab')
     parser.add_argument('--aco_dir', type=str, default='data/tcstar/aco')
     parser.add_argument('--synthesize_lab', type=str, default=None,

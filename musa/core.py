@@ -13,6 +13,7 @@ import numpy as np
 import tempfile
 import struct
 import json
+import timeit
 import os
 
 
@@ -85,6 +86,7 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
 def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
                save_path, out_fname, codebooks, lab_file, ogmios_fmt=True, 
                cuda=False, force_dur=False, pf=1):
+    beg_t = timeit.default_timer()
     if not force_dur:
         dur_model.eval()
     aco_model.eval()
@@ -103,7 +105,7 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
         #print('code[{}]:{}'.format(l_n, code))
         lab_codes.append(code)
     lab_codes = np.array(lab_codes, dtype=np.float32)
-    print('lab_codes shape: ', lab_codes.shape)
+    print('lab_codes tensor shape: ', lab_codes.shape)
     # prepare input data
     lab_codes = Variable(torch.from_numpy(lab_codes).unsqueeze(0))
     lab_codes = lab_codes.transpose(0, 1)
@@ -118,16 +120,14 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
     # TODO: add forced_dur option from labs?
     # predict dur
     durstats = spk2durstats[spk_int]
-    print('Selected spk {} durstats {}'.format(spk_id, 
-                                           json.dumps(durstats)))
     if force_dur:
         # use durs from lab file
-        print('tstamps: ', tstamps)
+        #print('tstamps: ', tstamps)
         dur = Variable(torch.FloatTensor(tstamps_to_dur(tstamps, True)))
         dur = dur.view(-1, 1, 1)
         if cuda:
             dur = dur.cuda()
-        print('dur: ', dur)
+        #print('dur: ', dur)
         # normalize durs
         ndurs = (dur - durstats['min']) / \
                 (durstats['max'] - durstats['min'])
@@ -137,9 +137,9 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
         min_dur = durstats['min']
         max_dur = durstats['max']
         dur = ndurs * min_dur - max_dur + min_dur
-        print('predicted dur: ', dur)
+        #print('predicted dur: ', dur)
 
-    print('ndur size: ', ndurs.size())
+    #print('ndur size: ', ndurs.size())
     # build acoustic batch
     aco_inputs = []
     # go over time dur by dur
@@ -150,7 +150,7 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
         dur_t = np.asscalar(dur[t, :, :].cpu().data.numpy())
         #print('dur_t: ', dur_t)
         while reldur_c < dur_t:
-            print('reldur_c: ', reldur_c)
+            #print('reldur_c: ', reldur_c)
             n_reldur = float(reldur_c) / dur_t
             #print('n_reldur: ', n_reldur)
             # every 5ms, shift. TODO: change hardcode to allow speed variation
@@ -160,68 +160,62 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
                                              np.array([n_reldur, ndur]))))
         #reldur = reldur_c / dur
         #aco_inputs
-    print('aco_inputs len: ', len(aco_inputs))
+    #print('aco_inputs len: ', len(aco_inputs))
     aco_seqlen = len(aco_inputs)
     aco_inputs = Variable(torch.FloatTensor(aco_inputs))
-    print('aco_inputs size: ', aco_inputs.size())
+    #print('aco_inputs size: ', aco_inputs.size())
     aco_inputs = aco_inputs.view(aco_seqlen, 1, -1)
-    print('aco_inputs size: ', aco_inputs.size())
+    #print('aco_inputs size: ', aco_inputs.size())
     if cuda:
         aco_inputs = aco_inputs.cuda()
     # TODO: forward through aco model
     yt, hstate, ostate = aco_model(aco_inputs,
                                    None, None,
                                    spk_id)
-    print('yt size: ', yt.size())
+    #print('yt size: ', yt.size())
     # TODO: denormalize aco predictions 
     acostats = spk2acostats[spk_int]
     min_aco = acostats['min']
     max_aco = acostats['max']
     yt_npy = yt.cpu().data.squeeze(1).numpy()
-    print('max acot: ', yt_npy.max())
-    print('min acot: ', yt_npy.min())
+    #print('max acot: ', yt_npy.max())
+    #print('min acot: ', yt_npy.min())
     acot = denorm_minmax(yt_npy, min_aco, max_aco)
     acot = apply_pf(acot, pf, n_feats=40)
-    print('Post normalize')
-    print('max acot: ', acot.max())
-    print('min acot: ', acot.min())
-    print('stats min: ', min_aco)
-    print('stats max: ', max_aco)
+    #print('Post normalize')
+    #print('max acot: ', acot.max())
+    #print('min acot: ', acot.min())
+    #print('stats min: ', min_aco)
+    #print('stats max: ', max_aco)
     # TODO: save resulting acoustic predictions
     # delete batch dimension
     #acot = acot.squeeze(1)
-    print('acot shape: ', acot.shape)
-    mfcc = acot[:, :40].reshape(-1).tolist()
+    #print('acot shape: ', acot.shape)
+    mfcc = acot[:, :40].reshape(-1)
     fv = acot[:, -3].reshape(-1)
     lf0 = acot[:, -2].reshape(-1)
     uv = acot[:, -1].reshape(-1)
-    print('uv min: ', uv.min())
-    print('uv max: ', uv.max())
+    #print('uv min: ', uv.min())
+    #print('uv max: ', uv.max())
     uv = np.round(uv)
-    print('uv min: ', uv.min())
-    print('uv max: ', uv.max())
+    #print('uv min: ', uv.min())
+    #print('uv max: ', uv.max())
     #np.save('{}/{}.uv'.format(save_path, out_fname), uv)
     fv[np.where(uv == 0)] = 1000.0
+    fv[np.where(fv < 1000)] = 1000.0
     lf0[np.where(uv == 0)] = -10000000000.0
-    fv = fv.tolist()
-    lf0 = lf0.tolist()
-    uv = uv.tolist()
     assert len(uv) == len(fv), 'uv len {} != ' \
                                'fv len {}'.format(len(uv),
                                                     len(fv))
     # write the output ahocoder files
-    mfcc_b = struct.pack('f' * len(mfcc), *mfcc)
-    fv_b = struct.pack('f' * len(fv), *fv)
-    lf0_b = struct.pack('f' * len(lf0), *lf0)
-    with open(os.path.join(save_path, 
-                           '{}.mfcc'.format(out_fname)), 'wb') as mfcc_f:
-        mfcc_f.write(mfcc_b)
-    with open(os.path.join(save_path, 
-                           '{}.fv'.format(out_fname)), 'wb') as fv_f:
-        fv_f.write(fv_b)
-    with open(os.path.join(save_path, 
-                           '{}.lf0'.format(out_fname)), 'wb') as lf0_f:
-        lf0_f.write(lf0_b)
+    write_aco_file('{}.cc'.format(out_fname), mfcc)
+    write_aco_file('{}.lf0'.format(out_fname), lf0)
+    write_aco_file('{}.fv'.format(out_fname), fv)
+    aco2wav(out_fname)
+    end_t = timeit.default_timer()
+    print('[*] Synthesis completed into file: {}.wav .\n'
+          'Total elapsed time: {:.4f} s'.format(out_fname,
+                                                end_t - beg_t))
 
 
     
