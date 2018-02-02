@@ -285,8 +285,12 @@ def main(opts):
                     # 6 boolean factors
                 ling_feats_dim += 6
                 print('ling_feats_dim: ', ling_feats_dim)
-            dur_model = torch.load(opts.dur_model)
-
+            if not opts.force_dur:
+                dur_model = torch.load(opts.dur_model, 
+                                       map_location=lambda storage, loc: storage)
+                print('Loaded duration model: ', dur_model)
+            else:
+                dur_model = None
             # build a duration model and load weights
             #dur_model = sinout_duration(num_inputs=ling_feats_dim,
             #                            num_outputs=1,
@@ -299,11 +303,11 @@ def main(opts):
             #                            mulout=opts.dur_mulout,
             #                            cuda=opts.cuda)
             #print('Loading duration model: ', opts.dur_weights)
-            print('Loaded duration model: ', dur_model)
             #dur_model.load(opts.dur_weights)
             print('spk2durstats: ', json.dumps(spk2durstats, indent=2))
             # build acoustic model and load weights
-            aco_model = torch.load(opts.aco_model)
+            aco_model = torch.load(opts.aco_model,
+                                   map_location=lambda storage, loc: storage)
 #            aco_model = acoustic_rnn(num_inputs=ling_feats_dim + 2,
 #                                     #num_outputs=aco_outputs,
 #                                     emb_size=opts.aco_emb_size,
@@ -318,6 +322,10 @@ def main(opts):
             print('Loading acoustic model: ',  opts.aco_model)
             #aco_model.load(opts.aco_model)
             print('idx2spk: ', json.dumps(idx2spk, indent=2))
+            if opts.cuda:
+                aco_model.cuda()
+                if not opts.force_dur:
+                    dur_model.cuda()
             # get lab file basename
             lab_fname = os.path.basename(opts.synthesize_lab)
             lab_bname, _ = os.path.splitext(lab_fname)

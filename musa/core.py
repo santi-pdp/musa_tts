@@ -126,7 +126,7 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
         dur = Variable(torch.FloatTensor(tstamps_to_dur(tstamps, True)))
         dur = dur.view(-1, 1, 1)
         if cuda:
-            dur = cur.cuda()
+            dur = dur.cuda()
         print('dur: ', dur)
         # normalize durs
         ndurs = (dur - durstats['min']) / \
