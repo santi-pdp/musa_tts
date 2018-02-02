@@ -331,7 +331,7 @@ def main(opts):
             lab_bname, _ = os.path.splitext(lab_fname)
             synthesize(dur_model, aco_model, 1, spk2durstats, spk2acostats,
                        opts.save_path, lab_bname, opts.codebooks_dir, opts.synthesize_lab, 
-                       cuda=False, force_dur=opts.force_dur, pf=opts.pf)
+                       cuda=opts.cuda, force_dur=opts.force_dur, pf=opts.pf)
 
 
 if __name__ == '__main__':

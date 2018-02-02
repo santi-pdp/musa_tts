@@ -144,10 +144,10 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
     aco_inputs = []
     # go over time dur by dur
     for t in range(ndurs.size(0)):
-        ndur = np.asscalar(ndurs[t, :, :].data.numpy())
+        ndur = np.asscalar(ndurs[t, :, :].cpu().data.numpy())
         # go over all windows within this dur
         reldur_c = 0.
-        dur_t = np.asscalar(dur[t, :, :].data.numpy())
+        dur_t = np.asscalar(dur[t, :, :].cpu().data.numpy())
         #print('dur_t: ', dur_t)
         while reldur_c < dur_t:
             print('reldur_c: ', reldur_c)
@@ -156,7 +156,7 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
             # every 5ms, shift. TODO: change hardcode to allow speed variation
             reldur_c += 0.005
             #print('lab_codes[t, 0, :].size()=', lab_codes[t, 0, :].size())
-            aco_inputs.append(np.concatenate((lab_codes[t, 0, :].data.numpy(),
+            aco_inputs.append(np.concatenate((lab_codes[t, 0, :].cpu().data.numpy(),
                                              np.array([n_reldur, ndur]))))
         #reldur = reldur_c / dur
         #aco_inputs
