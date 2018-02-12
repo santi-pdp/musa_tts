@@ -11,7 +11,7 @@ class acoustic_rnn(speaker_model):
     def __init__(self, num_inputs, emb_size, 
                  rnn_size, rnn_layers,
                  dropout, emb_activation='Tanh',
-                 sigmoid_out=True, speakers=None,
+                 speakers=None,
                  mulspk_type='sinout',
                  mulout=False, cuda=False,
                  bnorm=False,
@@ -27,10 +27,6 @@ class acoustic_rnn(speaker_model):
         self.bnorm = bnorm
         self.num_outputs = 43
         self.dropout = dropout
-        self.sigmoid_out = sigmoid_out
-        if not sigmoid_out:
-            print('BEWARE in aco model: not applying sigmoid to output, '
-                  'you may obtain classification values out of binary range')
         self.num_inputs = num_inputs
         print('aco_rnn num_inputs=', num_inputs)
         # build embedding of spks (if required) 
@@ -66,22 +62,25 @@ class acoustic_rnn(speaker_model):
                 y[spk], \
                 nout_state[spk] = self.out_layers[spk](x,
                                                        out_state[spk])
-                # binary classifier output ([-1]) has to go through relu
-                # to bound within [0, 1] properly
-                y[spk][:, :, -1] = F.relu(y[spk][:, :, -1], inplace=True)
+                # Bound classification output within [0, 1] properly
+                y[spk] = self.correct_classification_output(y[spk])
                 y[spk] = y[spk].view(dling_features.size(0), -1,
                                      self.num_outputs)
         else:
             y, nout_state = self.out_layer(x,
                                            out_state)
-            # binary classifier output ([-1]) has to go through relu
-            # to bound within [0, 1] properly
-            lin = y[:, :, :-1]
-            cla = y[:, :, -1:]
-            y = torch.cat((lin, F.relu(cla)), dim=2)
-            #y[:, :, -1] = F.relu(y[:, :, -1], inplace=True)
+            # Bound classification output within [0, 1] properly
+            y = self.correct_classification_output(y)
             y = y.view(dling_features.size(0), -1, self.num_outputs)
         return y, hid_state, nout_state
+
+    def correct_classification_output(self, x):
+        # split tensor in two, with last index being the one to go [0, 1]
+        lin = x[:, :, :-1]
+        cla = x[:, :, -1:]
+        # suposing it went through TANH
+        cla = (1 + cla) / 2
+        return torch.cat((lin, cla), dim=2)
 
     def init_hidden_state(self, curr_bsz, volatile=False):
         return (Variable(torch.zeros(self.rnn_layers, curr_bsz, self.rnn_size),
