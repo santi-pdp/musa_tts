@@ -437,7 +437,7 @@ def trim_spk_samples(spk_samples, spk_phones, min_count, mulout):
                     trim_samples[spk_name] = []
                     trim_phones[spk_name] = []
 
-                if spk_counts[spk_name] < (min_count - 1):
+                if spk_counts[spk_name] < min_count:
                     trim_samples[spk_name].append(spk_sample_)
                     trim_phones[spk_name].append(spk_phone_)
                     spk_counts[spk_name] += 1
@@ -466,7 +466,7 @@ def trim_spk_samples(spk_samples, spk_phones, min_count, mulout):
             #print('Spk_counts[{}] = {}'.format(spk_id,
             #                                   spk_counts[spk_id],
             #                                   min_count - 1))
-            if spk_counts[spk_id] < (min_count - 1):
+            if spk_counts[spk_id] < min_count:
                 trim_samples.append(spk_sample)
                 trim_phones.append(spk_phone)
                 spk_counts[spk_id] += 1
