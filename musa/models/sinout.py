@@ -15,7 +15,7 @@ class acoustic_rnn(speaker_model):
                  mulspk_type='sinout',
                  mulout=False, cuda=False,
                  bnorm=False,
-                 emb_layers=4):
+                 emb_layers=2):
         super(acoustic_rnn, self).__init__(num_inputs, mulspk_type, 
                                            speakers=speakers,
                                            cuda=cuda)
@@ -113,7 +113,7 @@ class sinout_duration(speaker_model):
 
     def __init__(self, num_inputs, num_outputs, emb_size, rnn_size, rnn_layers,
                  dropout, sigmoid_out=False, speakers=None, mulout=False,
-                 cuda=False):
+                 cuda=False, emb_layers=1):
         if mulout:
             mulspk_type = 'mulout'
         else:
@@ -133,6 +133,7 @@ class sinout_duration(speaker_model):
         self.speakers = None
         assert num_inputs > 0, num_inputs
         self.emb_size = emb_size
+        self.emb_layers = emb_layers
         self.rnn_size = rnn_size
         self.rnn_layers = rnn_layers
         self.num_outputs = num_outputs
