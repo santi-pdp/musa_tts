@@ -16,9 +16,9 @@ class acoustic_rnn(speaker_model):
                  mulout=False, cuda=False,
                  bnorm=False,
                  emb_layers=2):
-        super(acoustic_rnn, self).__init__(num_inputs, mulspk_type, 
-                                           speakers=speakers,
-                                           cuda=cuda)
+        super().__init__(num_inputs, mulspk_type, 
+                         speakers=speakers,
+                         cuda=cuda)
         self.emb_size = emb_size
         self.emb_layers = emb_layers
         self.emb_activation = emb_activation

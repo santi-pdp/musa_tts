@@ -50,9 +50,9 @@ def main(opts):
                           opts.lab_dir, opts.codebooks_dir,
                           norm_dur=True,
                           exclude_eval_spks=opts.exclude_eval_spks,
-                          max_spk_samples=opts.dur_max_samples,
+                          max_spk_samples=opts.max_samples,
                           parse_workers=opts.parser_workers,
-                          max_seq_len=opts.dur_max_seq_len,
+                          max_seq_len=opts.max_seq_len,
                           batch_size=opts.batch_size,
                           q_classes=opts.q_classes,
                           mulout=opts.dur_mulout)
@@ -75,17 +75,17 @@ def main(opts):
     else:
         model_spks = list(dset.all_speakers.keys())
     # build a duration model ready to train
-    dur_model = sinout_duration(num_inputs=dset.ling_feats_dim,
-                                num_outputs=dur_outputs,
-                                emb_size=opts.emb_size,
-                                rnn_size=opts.rnn_size,
-                                rnn_layers=opts.rnn_layers,
-                                sigmoid_out=opts.sigmoid_dur,
-                                dropout=opts.dur_dout,
-                                speakers=model_spks,
-                                mulout=opts.dur_mulout,
-                                cuda=opts.cuda,
-                                emb_layers=opts.emb_layers)
+    dur_model = duration_rnn(num_inputs=dset.ling_feats_dim,
+                             num_outputs=dur_outputs,
+                             emb_size=opts.emb_size,
+                             rnn_size=opts.rnn_size,
+                             rnn_layers=opts.rnn_layers,
+                             sigmoid_out=opts.sigmoid_dur,
+                             dropout=opts.dur_dout,
+                             speakers=model_spks,
+                             mulout=opts.dur_mulout,
+                             cuda=opts.cuda,
+                             emb_layers=opts.emb_layers)
     opti = getattr(optim, opts.dur_optim)(dur_model.parameters(),
                                       lr=opts.dur_lr)
     if opts.cuda:
@@ -102,7 +102,7 @@ def main(opts):
         criterion = nn.NLLoss()
     tr_opts = {'spk2durstats':spk2durstats,
                'idx2spk':dset.idx2spk}
-    if opts.dur_max_seq_len is not None:
+    if opts.max_seq_len is not None:
         # we have a stateful approach
         tr_opts['stateful'] = True
     va_opts = {'idx2spk':dset.idx2spk}
