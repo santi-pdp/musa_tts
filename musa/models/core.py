@@ -4,6 +4,41 @@ import torch.nn as nn
 import os
 
 
+class emb_block(nn.Module):
+
+    def __init__(self, num_inputs, emb_layers, emb_size, emb_act='Tanh',
+                 bnorm=False):
+        super().__init__()
+        self.num_inputs = num_inputs
+        self.emb_layers = emb_layers
+        self.emb_size = emb_size
+        self.emb_act = emb_act
+
+        self.emb = nn.ModuleList()
+        for li in range(emb_layers):
+            if li == 0:
+                ninp = num_inputs
+            else:
+                ninp = emb_size
+            self.emb.append(nn.Linear(ninp, emb_size))
+            if bnorm:
+                self.emb.append(nn.BatchNorm1d(emb_size))
+            if emb_act == 'PReLU':
+                act = getattr(nn, emb_act)(emb_size)
+            else:
+                act = getattr(nn, emb_act)()
+            self.emb.append(act)
+
+    def forward(self, x):
+        h = x
+        for i, l in enumerate(self.emb):
+            if isinstance(l, nn.PReLU):
+                h = l(h.transpose(1, 2)).transpose(1, 2)
+            else:
+                h = l(h)
+        return h
+
+
 class speaker_model(nn.Module):
 
     def __init__(self, num_inputs, mulspk_type, speakers=None, cuda=False):
