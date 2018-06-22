@@ -81,7 +81,7 @@ def main(opts):
                              mulout=opts.mulout,
                              cuda=opts.cuda,
                              emb_layers=opts.emb_layers,
-                             emb_act=opts.emb_act)
+                             emb_act=opts.emb_activation)
     criterion = getattr(nn, opts.loss)(size_average=True)
     opti = getattr(optim, opts.optim)(dur_model.parameters(),
                                       lr=opts.lr)
@@ -142,7 +142,6 @@ if __name__ == '__main__':
     parser.add_argument('--rnn_layers', type=int, default=1)
     parser.add_argument('--emb_size', type=int, default=256)
     parser.add_argument('--emb_layers', type=int, default=1)
-    parser.add_argument('--emb_act', type=str, default='Tanh')
     parser.add_argument('--q_classes', type=int, default=None,
                         help='Num of clusters in dur quantization. '
                              'If specified, this will triger '

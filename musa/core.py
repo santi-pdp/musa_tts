@@ -76,11 +76,11 @@ def train_engine(model, dloader, opt, log_freq, train_fn, train_criterion,
         model.save(save_path, model_savename, epoch,
                    best_val=best_model)
         for k, v in tr_loss.items():
-            print('Saving training loss ', k)
+            #print('Saving training loss ', k)
             np.save(os.path.join(save_path, k), v)
         if eval_target:
             for k, v in va_loss.items():
-                print('Saving val score ', k)
+                #print('Saving val score ', k)
                 np.save(os.path.join(save_path, k), v)
 
 def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
@@ -409,7 +409,7 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
         tr_opts.pop('stateful')
     spk2durstats = None
     if 'spk2durstats' in tr_opts:
-        print('Getting spk2durstats')
+        #print('Getting spk2durstats')
         spk2durstats = tr_opts.pop('spk2durstats')
     idx2spk = None
     if 'idx2spk' in tr_opts:
@@ -434,7 +434,6 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
     for b_idx, batch in enumerate(dloader):
         # decompose the batch into the sub-batches
         spk_b, lab_b, dur_b, slen_b, ph_b = batch
-        write_histogram_log(dur_b, 'train/dur', global_step, log_writer)
         # build batch of curr_ph to filter out results without sil phones
         # size of curr_ph_b [bsize, seqlen]
         curr_ph_b = [[ph[2] for ph in ph_s] for ph_s in ph_b]
@@ -544,6 +543,8 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
                 epoch_losses['tr_loss'].append(loss.data[0])
                 write_scalar_log(loss.data[0], 'tr_loss',
                                  global_step, log_writer)
+                write_histogram_log(dur_b, 'train/dur', global_step, 
+                                    log_writer)
                 if nosil_dur_rmse:
                     epoch_losses['tr_rmse'].append(nosil_dur_rmse)
                     write_scalar_log(nosil_dur_rmse, 'tr_nosil_dur_rmse',
