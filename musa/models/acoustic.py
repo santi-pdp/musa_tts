@@ -239,3 +239,146 @@ class sinout_duration(speaker_model):
                 Variable(torch.zeros(self.rnn_layers, curr_bsz, self.rnn_size), 
                          volatile=volatile))
 
+def wavrnn_normalize(x):
+    # assuming input is [0, 255] scalars
+    return (2 * x) / 255. - 1
+
+class WavRNN(nn.Module):
+
+    def __init__(self, hidden_size=896, q_levels=256, teacher_force=False,
+                 cuda=False):
+        super().__init__()
+        self.do_cuda = cuda
+        self.hidden_size = hidden_size
+        self.subhidden_size = hidden_size // 2
+        subhidden_size = self.subhidden_size
+        # R is applied to all inputs simultaneously
+        # R contains [Ru, Rr, Re], one per gate
+        self.R = nn.Linear(hidden_size, hidden_size * 3, bias=False)
+        # Wc projects [ct_1, ft_1, 0] as currnet input to ct
+        self.Wc = nn.Linear(2, subhidden_size * 3, bias=False)
+        # Wf projects [ct_1, ft_1, ct] as current input to ft
+        self.Wf = nn.Linear(3, subhidden_size * 3, bias=False)
+        # Output MLPs
+        self.mlp_c = nn.Sequential(nn.Linear(subhidden_size, subhidden_size),
+                                   nn.ReLU(inplace=True),
+                                   nn.Linear(subhidden_size, q_levels),
+                                   nn.LogSoftmax(dim=2))
+        self.mlp_f = nn.Sequential(nn.Linear(subhidden_size, subhidden_size),
+                                   nn.ReLU(inplace=True),
+                                   nn.Linear(subhidden_size, q_levels),
+                                   nn.LogSoftmax(dim=2))
+
+        # biases for fwd matrices
+        self.b_u = nn.Parameter(torch.zeros(self.hidden_size))
+        self.b_r = nn.Parameter(torch.zeros(self.hidden_size))
+        self.b_e = nn.Parameter(torch.zeros(self.hidden_size))
+        self.teacher_force = teacher_force
+
+    def load_weights(self, state_dict_path):
+        state_dict = torch.load(state_dict_path,
+                                map_location=lambda storage, loc: storage)
+        self.load_state_dict(state_dict)
+
+    def forward(self, sample, state=None, cts=None):
+        # sample is a tensor containing [B, S, (ct_1|ft_1)]
+        # cts is given if sample seqlen is > 1 (teacher forcing)
+        # cts ~ [B, S, 1]
+        curr_bsz = sample.size(0)
+        sample = wavrnn_normalize(sample.float())
+        # state is a tensor of size [bsz, hidden_size]
+        if state is None:
+            # init state
+            state = self.init_state(curr_bsz, self.do_cuda)
+
+        if self.teacher_force:
+            # teacher-force mode, cts must be specified as 
+            # feedback replacements
+            assert cts is not None
+            # build triplet [ct_1, ft_1, ct]
+            sample_f = torch.cat((sample,
+                                  wavrnn_normalize(cts.float())), 
+                                  dim=2)
+            # make forward projections
+            proj_c = self.Wc(sample)
+            proj_f = self.Wf(sample_f)
+            # split corresponding fwd coarse and fine
+            utc_fwd, rtc_fwd, etc_fwd = torch.chunk(proj_c, 3, dim=2)
+            utf_fwd, rtf_fwd, etf_fwd = torch.chunk(proj_f, 3, dim=2)
+            # concatenate ops for the gates
+            fwd_u = torch.cat([utc_fwd, utf_fwd], dim=2).contiguous()
+            fwd_r = torch.cat([rtc_fwd, rtf_fwd], dim=2).contiguous()
+            fwd_e = torch.cat([etc_fwd, etf_fwd], dim=2).contiguous()
+
+            # compute all gates for coarse and fine and then activation
+            #beg_t = timeit.default_timer()
+            states = []
+            fwd_us = torch.chunk(fwd_u, fwd_u.size(1), dim=1)
+            fwd_rs = torch.chunk(fwd_r, fwd_r.size(1), dim=1)
+            fwd_es = torch.chunk(fwd_e, fwd_e.size(1), dim=1)
+            #timings = []
+            for t_, (fwd_ut, fwd_rt, fwd_et) in enumerate(zip(fwd_us,
+                                                              fwd_rs,
+                                                              fwd_es)):
+                # Common inference of feedback R for three gates
+                r_ = self.R(state)
+                r_u, r_r, r_e = torch.chunk(r_, 3, dim=1)
+                ut = F.sigmoid(r_u + fwd_ut.squeeze(1) + self.b_u)
+                rt = F.sigmoid(r_r + fwd_rt.squeeze(1) + self.b_r) 
+                et = F.tanh(rt * r_e + fwd_et.squeeze(1) + self.b_e) 
+                state = ut * state + (1 - ut) * et 
+                states.append(state.unsqueeze(1))
+            states = torch.cat(states, dim=1)
+            htc, htf = torch.chunk(states, 2, dim=2)
+            # predict cts and fts
+            cts = self.mlp_c(htc)
+            fts = self.mlp_f(htf)
+            return cts, fts, state.unsqueeze(1)
+        else:
+            # Common inference of feedback R for three gates
+            r_ = self.R(state)
+            r_u, r_r, r_e = torch.chunk(r_, 3, dim=1)
+            # inference step 1 by 1
+            htc_1 , htf_1 = torch.chunk(state, 2, dim=1)
+            # (1) predict ct
+            r_u_c, r_u_f = torch.chunk(r_u, 2, dim=1)
+            r_e_c, r_e_f = torch.chunk(r_e, 2, dim=1)
+            r_r_c, r_r_f = torch.chunk(r_r, 2, dim=1)
+            b_c_u, b_f_u = torch.chunk(self.b_u, 2)
+            b_c_r, b_f_r = torch.chunk(self.b_r, 2)
+            b_c_e, b_f_e = torch.chunk(self.b_e, 2)
+            # feed forward coarse
+            proj_c = self.Wc(sample)
+            utc_fwd, rtc_fwd, etc_fwd = torch.chunk(proj_c, 3, dim=2)
+
+            utc = F.sigmoid(r_u_c + utc_fwd + b_c_u) 
+            rtc = F.sigmoid(r_r_c + rtc_fwd + b_c_r) 
+            etc = F.tanh(rtc * r_e_c + etc_fwd + b_c_e) 
+            htc = utc * htc_1 + (1 - utc) * etc
+            # ------- ct prediction
+            ct = self.mlp_c(htc)
+            ct_idx = ct.max(2)[1].unsqueeze(1)
+            # (2) predict ft
+            # build triplet [ct_1, ft_1, ct]
+            sample_f = torch.cat((sample,
+                                  wavrnn_normalize(ct_idx.float())), 
+                                  dim=2)
+            # feed forward fine
+            proj_f = self.Wf(sample_f)
+            utf_fwd, rtf_fwd, etf_fwd = torch.chunk(proj_f, 3, dim=2)
+
+            utf = F.sigmoid(r_u_f + utf_fwd + b_f_u) 
+            rtf = F.sigmoid(r_r_f + rtf_fwd + b_f_r) 
+            etf = F.tanh(rtf * r_e_f + etf_fwd + b_f_e) 
+            htf = utf * htf_1 + (1 - utf) * etf
+            # ------- ft prediction
+            ft = self.mlp_f(htf)
+            return ct, ft, torch.cat((htc.squeeze(1), 
+                                      htf.squeeze(1)), dim=1)
+
+    def init_state(self, bsz, cuda):
+        v = Variable(torch.zeros(bsz, self.hidden_size))
+        if cuda:
+            v = v.cuda()
+        return v
+

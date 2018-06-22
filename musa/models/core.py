@@ -4,41 +4,6 @@ import torch.nn as nn
 import os
 
 
-class emb_block(nn.Module):
-
-    def __init__(self, num_inputs, emb_layers, emb_size, emb_act='Tanh',
-                 bnorm=False):
-        super().__init__()
-        self.num_inputs = num_inputs
-        self.emb_layers = emb_layers
-        self.emb_size = emb_size
-        self.emb_act = emb_act
-
-        self.emb = nn.ModuleList()
-        for li in range(emb_layers):
-            if li == 0:
-                ninp = num_inputs
-            else:
-                ninp = emb_size
-            self.emb.append(nn.Linear(ninp, emb_size))
-            if bnorm:
-                self.emb.append(nn.BatchNorm1d(emb_size))
-            if emb_act == 'PReLU':
-                act = getattr(nn, emb_act)(emb_size)
-            else:
-                act = getattr(nn, emb_act)()
-            self.emb.append(act)
-
-    def forward(self, x):
-        h = x
-        for i, l in enumerate(self.emb):
-            if isinstance(l, nn.PReLU):
-                h = l(h.transpose(1, 2)).transpose(1, 2)
-            else:
-                h = l(h)
-        return h
-
-
 class speaker_model(nn.Module):
 
     def __init__(self, num_inputs, mulspk_type, speakers=None, cuda=False):
@@ -102,14 +67,14 @@ class speaker_model(nn.Module):
             from collections import OrderedDict
             emb_fc_d = OrderedDict()
             emb_fc_d['act_0'] = getattr(nn, self.emb_activation)()
-            if self.bnorm:
+            if hasattr(self, 'bnorm') and self.bnorm:
                 emb_fc_d['bnorm_0'] = nn.BatchNorm1d(self.emb_size)
             for n in range(self.emb_layers - 1):
                 emb_fc_d['fc_{}'.format(n + 1)] = nn.Linear(self.emb_size,
                                                              self.emb_size)
                 emb_fc_d['dout_{}'.format(n + 1)] = nn.Dropout(self.dropout)
                 emb_fc_d['act_{}'.format(n + 1)] = getattr(nn, self.emb_activation)()
-                if self.bnorm:
+                if hasattr(self, 'bnorm') and self.bnorm:
                     emb_fc_d['bnorm_{}'.format(n + 1)] = nn.BatchNorm1d(self.emb_size)
             self.emb_fc = nn.Sequential(emb_fc_d)
 
@@ -148,15 +113,15 @@ class speaker_model(nn.Module):
 
     def forward_input_embedding(self, dling_features, speaker_idx):
         # inputs are time-major (Seqlen, Bsize, features)
-        re_dling_features = dling_features.view(-1, dling_features.size(-1))
+        dling_features = dling_features.transpose(0, 1)
+        #re_dling_features = dling_features.view(-1, dling_features.size(-1))
+        #re_dling_features = dling_features.view(-1, dling_features.size(-1))
         if not self.gating:
             # use the NOT gated mechanism (sinout, mulout)
             # go through fully connected embedding layers
             # if sinout, merge embedding vector for many 
             # speakers case
-            in_h = self.input_fc(re_dling_features)
-            in_h = in_h.view(dling_features.size(0), -1,
-                             in_h.size(-1))
+            in_h = self.input_fc(dling_features)
             if self.speakers is not None and self.sinout:
                 # project speaker ID through embedding layer
                 emb_h = self.emb(speaker_idx)
@@ -165,17 +130,18 @@ class speaker_model(nn.Module):
             #print('in_h: ', in_h.size())
             #print('self.emb_size: ', self.emb_size)
             # forward through remaining fc embeddings
-            x = self.emb_fc(in_h.view(-1, in_h.size(-1)))
+            x = self.emb_fc(in_h)
         else:
             # use the gated mechanism
-            x = re_dling_features
+            x = dling_features
             for (tanh_l, sig_l) in zip(self.emb_fc,
                                        self.emb_g):
                 x_tanh = tanh_l(x)
                 x_sig = sig_l(x)
                 x = x_tanh * x_sig
-        x = x.view(dling_features.size(0), -1, 
-                   self.emb_size)
+        #x = x.view(dling_features.size(0), -1, 
+        #           self.emb_size)
+        x = x.transpose(0, 1)
         return x
 
     def build_core_rnn(self):
@@ -210,7 +176,8 @@ class speaker_model(nn.Module):
             for k in self.speakers:
                 if rnn_output:
                     self.out_layers[k] = nn.LSTM(self.rnn_size,
-                                                 self.num_outputs)
+                                                 self.num_outputs,
+                                                 batch_first=True)
                 else:
                     self.out_layers[k] = nn.Linear(self.rnn_size,
                                                    self.num_outputs)
@@ -222,7 +189,7 @@ class speaker_model(nn.Module):
                                          self.num_outputs,
                                          num_layers=1,
                                          bidirectional=False,
-                                         batch_first=False,
+                                         batch_first=True,
                                          dropout=0.)
             else:
                 self.out_layer = nn.Linear(self.rnn_size,
