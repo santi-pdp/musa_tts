@@ -248,6 +248,7 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
                               '{}'.format(tr_opts.keys())
     epoch_losses = {}
     num_batches = len(dloader)
+    print('num_batches: ', num_batches)
     # keep stateful references by spk idx
     spk2hid_states = {}
     spk2out_states = {}
@@ -263,11 +264,10 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
         # size of curr_ph_b [bsize, seqlen]
         curr_ph_b = [[ph[2] for ph in ph_s] for ph_s in ph_b]
         # convert all into variables and transpose (we want time-major)
-        spk_b = Variable(spk_b).transpose(0,1).contiguous()
-        spk_name = idx2spk[spk_b.data[0,0]]
-        lab_b = Variable(lab_b).transpose(0,1).contiguous()
-        aco_b = Variable(aco_b).transpose(0,1).contiguous()
-        slen_b = Variable(slen_b)
+        spk_b = spk_b.transpose(0,1)
+        spk_name = idx2spk[spk_b.data[0,0].item()]
+        lab_b = lab_b.transpose(0,1)
+        aco_b = aco_b.transpose(0,1)
         # get curr batch size
         curr_bsz = spk_b.size(1)
         if spk_name not in spk2hid_states:
@@ -301,8 +301,6 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
             # save its states
             spk2hid_states[spk_name] = hid_state
             spk2out_states[spk_name] = out_state
-        #print('y size: ', y.size())
-        #print('aco_b size: ', aco_b.size())
         y = y.squeeze(-1)
         loss = criterion(y, aco_b)
         if mulout:
@@ -348,7 +346,7 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
             #print('Keeping {} spk loss'
             #      ' {:.4f}'.format(idx2spk[spk_b[0,0].cpu().data[0]],
             #                                          loss.data[0]))
-            spk_loss_batch[idx2spk[spk_b[0,0].cpu().data[0]]] = loss.data[0]
+            spk_loss_batch[idx2spk[spk_b[0,0].item()]] = loss.data[0]
                 
         #print('batch {:4d}: loss: {:.5f}'.format(b_idx + 1, loss.data[0]))
         opt.zero_grad()
@@ -372,15 +370,15 @@ def train_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
                                      global_step, log_writer)
                 log_mesg = log_mesg[:-1] + ')'
             else:
-                log_mesg += ' loss {:.5f}'.format(loss.data[0])
+                log_mesg += ' loss {:.5f}'.format(loss.item())
                 if nosil_aco_mcd is not None:
                     log_mesg += ', MCD {:.5f} dB'.format(nosil_aco_mcd)
                 if 'tr_loss' not in epoch_losses:
                     epoch_losses['tr_loss'] = []
                     if nosil_aco_mcd:
                         epoch_losses['tr_mcd'] = []
-                epoch_losses['tr_loss'].append(loss.data[0])
-                write_scalar_log(loss.data[0], 'tr_loss',
+                epoch_losses['tr_loss'].append(loss.item())
+                write_scalar_log(loss.item(), 'tr_loss',
                                  global_step, log_writer)
                 if nosil_aco_mcd:
                     epoch_losses['tr_mcd'].append(nosil_aco_mcd)
@@ -607,7 +605,7 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
             #print('len(curr_ph_b[0]): ', len(curr_ph_b[0]))
             # convert all into variables and transpose (we want time-major)
             spk_b = spk_b.transpose(0,1)
-            spk_name = idx2spk[spk_b.cpu().data[0,0]]
+            spk_name = idx2spk[spk_b.cpu().data[0,0].item()]
             lab_b = lab_b.transpose(0,1)
             aco_b = aco_b.transpose(0,1)
             # get curr batch size
@@ -933,3 +931,178 @@ def eval_dur_epoch(model, dloader, epoch_idx, cuda=False,
         return nosil_spkname_rmse
 
 
+def train_fbdecoder_aco_epoch(model, dloader, opt, log_freq, epoch_idx,
+                              criterion=None, cuda=False, tr_opts={},
+                              spk2acostats=None, log_writer=None):
+    # When mulout is True (MO), log_freq is per round, not batch
+    # note that a round will have N batches
+    model.train()
+    global_step = epoch_idx * len(dloader)
+    # At the moment, acoustic training is always stateful
+    spk2acostats = None
+    if 'spk2acostats' in tr_opts:
+        print('Getting spk2acostats')
+        spk2acostats = tr_opts.pop('spk2acostats')
+    idx2spk = None
+    if 'idx2spk' in tr_opts:
+        idx2spk = tr_opts.pop('idx2spk')
+    mulout = False
+    round_N = 1
+    if 'mulout' in tr_opts:
+        print('Multi-Output aco training')
+        mulout = tr_opts.pop('mulout')
+        round_N = len(list(idx2spk.keys()))
+        if idx2spk is None:
+            raise ValueError('Specify a idx2spk in training opts '
+                             'when using MO.')
+    assert len(tr_opts) == 0, 'unrecognized params passed in: '\
+                              '{}'.format(tr_opts.keys())
+    epoch_losses = {}
+    num_batches = len(dloader)
+    print('num_batches: ', num_batches)
+    # keep stateful references by spk idx
+    spk2hid_states = {}
+    spk2out_states = {}
+    if mulout:
+        # keep track of the losses per round to make a proper log
+        # when MO is running 
+        spk_loss_batch = {}
+
+    for b_idx, batch in enumerate(dloader):
+        # decompose the batch into the sub-batches
+        spk_b, lab_b, aco_b, slen_b, ph_b = batch
+        # build batch of curr_ph to filter out results without sil phones
+        # size of curr_ph_b [bsize, seqlen]
+        curr_ph_b = [[ph[2] for ph in ph_s] for ph_s in ph_b]
+        # convert all into variables and transpose (we want time-major)
+        spk_b = spk_b.transpose(0,1)
+        spk_name = idx2spk[spk_b.data[0,0].item()]
+        lab_b = lab_b.transpose(0,1)
+        aco_b = aco_b.transpose(0,1)
+        # get curr batch size
+        curr_bsz = spk_b.size(1)
+        if spk_name not in spk2hid_states:
+            # initialize hidden states for this (hidden and out) speaker
+            #print('Initializing states of spk ', spk_name)
+            hid_state = model.init_hidden_state(curr_bsz)
+            out_state = model.init_output_state(curr_bsz)
+        else:
+            #print('Fetching mulout states of spk ', spk_name)
+            # select last spks state in the MO dict and repackage
+            # to not backprop the gradients infinite in time
+            hid_state = spk2hid_states[spk_name]
+            out_state = spk2out_states[spk_name]
+            hid_state = repackage_hidden(hid_state, curr_bsz)
+            out_state = repackage_hidden(out_state, curr_bsz)
+        if cuda:
+            spk_b = var_to_cuda(spk_b)
+            lab_b = var_to_cuda(lab_b)
+            aco_b = var_to_cuda(aco_b)
+            slen_b = var_to_cuda(slen_b)
+            hid_state = var_to_cuda(hid_state)
+            out_state = var_to_cuda(out_state)
+        #print(list(out_state.keys()))
+        #print('lab_b size: ', lab_b.size())
+        # forward through model
+        y, hid_state, out_state = model(lab_b, hid_state, out_state, speaker_idx=spk_b)
+        if isinstance(y, dict):
+            # we have a MO model, pick the right spk
+            y = y[spk_name]
+            #print('Saving states of spk ', spk_name)
+            # save its states
+            spk2hid_states[spk_name] = hid_state
+            spk2out_states[spk_name] = out_state
+        #print('y size: ', y.size())
+        #print('aco_b size: ', aco_b.size())
+        y = y.squeeze(-1)
+        loss = criterion(y, aco_b)
+        if mulout:
+            spk_loss_batch[idx2spk[spk_b[0,0].cpu().data[0]]] = loss.data[0]
+
+        if criterion != F.nll_loss:
+            # TODO: add the aco eval
+            preds = None
+            gtruths = None
+            seqlens = None
+            spks = None
+            # make the silence mask
+            sil_mask = None
+            preds, gtruths, \
+            spks, sil_mask = predict_masked_mcd(y, aco_b, slen_b, 
+                                                spk_b, curr_ph_b,
+                                                preds, gtruths,
+                                                spks, sil_mask,
+                                                'pau')
+            #print('Tr After batch preds shape: ', preds.shape)
+            #print('Tr After batch gtruths shape: ', gtruths.shape)
+            #print('Tr After batch sil_mask shape: ', sil_mask.shape)
+            # denorm with normalization stats
+            assert spk2acostats is not None
+            preds, gtruths = denorm_aco_preds_gtruth(preds, gtruths,
+                                                     spks, spk2acostats)
+            #print('preds[:20] = ', preds[:20])
+            #print('gtruths[:20] = ', gtruths[:20])
+            #print('pred min: {}, max: {}'.format(preds.min(), preds.max()))
+            #print('gtruths min: {}, max: {}'.format(gtruths.min(), gtruths.max()))
+            nosil_aco_mcd = mcd(preds[:,:40] * sil_mask, gtruths[:,:40] * sil_mask)
+        else:
+            nosil_aco_mcd = None
+        # compute loss
+        if criterion == F.nll_loss:
+            raise NotImplementedError('No nll_loss possible')
+            #y = y.view(-1, y.size(-1))
+            #aco_b = aco_b.view(-1)
+            #q_classes = True
+        #print('y size: ', y.size())
+        #print('aco_b: ', aco_b.size())
+        if mulout:
+            #print('Keeping {} spk loss'
+            #      ' {:.4f}'.format(idx2spk[spk_b[0,0].cpu().data[0]],
+            #                                          loss.data[0]))
+            spk_loss_batch[idx2spk[spk_b[0,0].item()]] = loss.data[0]
+                
+        #print('batch {:4d}: loss: {:.5f}'.format(b_idx + 1, loss.data[0]))
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        #print('y size: ', y.size())
+        if (b_idx + 1) % (round_N * log_freq) == 0 or \
+           (b_idx + 1) >= num_batches:
+            log_mesg = 'batch {:4d}/{:4d} (epoch {:3d})'.format(b_idx + 1,
+                                                                num_batches,
+                                                                epoch_idx)
+            if mulout:
+                log_mesg += ' MO losses: ('
+                for mok, moloss in spk_loss_batch.items():
+                    log_mesg += '{}:{:.3f},'.format(mok, moloss)
+                    loss_mo_name = 'mo-{}_tr_loss'.format(mok)
+                    if loss_mo_name not in epoch_losses:
+                        epoch_losses[loss_mo_name] = []
+                    epoch_losses[loss_mo_name].append(moloss)
+                    write_scalar_log(moloss, loss_mo_name,
+                                     global_step, log_writer)
+                log_mesg = log_mesg[:-1] + ')'
+            else:
+                log_mesg += ' loss {:.5f}'.format(loss.item())
+                if nosil_aco_mcd is not None:
+                    log_mesg += ', MCD {:.5f} dB'.format(nosil_aco_mcd)
+                if 'tr_loss' not in epoch_losses:
+                    epoch_losses['tr_loss'] = []
+                    if nosil_aco_mcd:
+                        epoch_losses['tr_mcd'] = []
+                epoch_losses['tr_loss'].append(loss.item())
+                write_scalar_log(loss.item(), 'tr_loss',
+                                 global_step, log_writer)
+                if nosil_aco_mcd:
+                    epoch_losses['tr_mcd'].append(nosil_aco_mcd)
+                    write_scalar_log(nosil_aco_mcd, 'tr_mcd',
+                                     global_step, log_writer)
+            print(log_mesg)
+        global_step += 1
+    end_log = '-- Finished epoch {:4d}, mean losses:'.format(epoch_idx)
+    if isinstance(epoch_losses, dict):
+        for k, val in epoch_losses.items():
+            end_log += ' ({} : {:.5f})'.format(k, np.mean(val))
+    end_log += ' --'
+    print(end_log)
+    return epoch_losses
