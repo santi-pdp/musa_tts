@@ -349,21 +349,16 @@ class TCSTAR(Dataset):
                               'split'.format(spk))
                         del self.speakers[spk]
         # store spk2idx
-        fspk = list(self.speakers.keys())[0]
-        if 'idx' not in self.speakers[fspk]:
-            print('Indexing speakers with their ids...')
-            # index speakers with integer ids
-            self.spk2idx = dict((sname, i) for i, sname in
-                                enumerate(self.all_speakers.keys()))
-            for spk,idx in self.spk2idx.items():
-                self.speakers[spk]['idx'] = idx
-            print('Created ids: ', json.dumps(self.spk2idx, indent=2))
-        else:
-            # load existing indexation
-            self.spk2idx = {}
-            for spk in self.speakers.keys():
+        self.spk2idx = {}
+        # Load all known indices
+        for spk in self.speakers.keys():
+            if 'idx' in self.speakers[spk]:
                 self.spk2idx[spk] = self.speakers[spk]['idx']
-            print('Loaded ids: ', json.dumps(self.spk2idx, indent=2))
+        # Include missing indices 
+        for spk in self.speakers.keys():
+            if 'idx' not in self.speakers[spk]:
+                self.spk2idx[spk] = len(self.spk2idx)
+        print('spk2idx in TCSTAR: ', json.dumps(self.spk2idx, indent=2))
         self.idx2spk = dict((v, k) for k, v in self.spk2idx.items())
         self.split = split
         self.lab_dir = lab_dir
@@ -399,6 +394,7 @@ class TCSTAR(Dataset):
         total_parsed_reldur = []
         # prepare a multi-processing pool to parse labels faster
         parse_pool = mp.Pool(self.parse_workers)
+        beg_t = timeit.default_timer()
         num_labs_total = sum(len(spk[self.split]) for sname, spk in
                                  self.speakers.items())
         if self.max_spk_samples is not None:
@@ -420,6 +416,8 @@ class TCSTAR(Dataset):
             spk['result'] = parse_pool.apply_async(async_f, async_args)
         parse_pool.close()
         parse_pool.join()
+        end_t = timeit.default_timer()
+        print('Total parse time: {} s'.format(end_t - beg_t))
         for sname, spk in self.speakers.items():
             result = spk['result'].get()
             parsed_timestamps = result[1]
@@ -1032,13 +1030,6 @@ class TCSTAR_aco(TCSTAR):
                                                  self.phone_sample,
                                                  counts_min,
                                                  self.mulout)
-            print('len self.vec_sample after trim: ', len(self.vec_sample))
-            first_vec_len = len(self.vec_sample[0])
-            raw_aco = []
-            for vi, vseq in enumerate(self.vec_sample):
-                for vsample in vseq:
-                    raw_aco.append(vsample[1])
-            #np.save('/tmp/{}-aco.npy'.format(self.split), raw_aco)
             if self.mulout:
                 # go over all speaker ids and trim to max amount of samples
                 for spkname, phsample in self.phone_sample.items():
@@ -1046,6 +1037,14 @@ class TCSTAR_aco(TCSTAR):
                     print('spk {} phsample len: {}'.format(spkname, len(phsample)))
                     #for phs in phsample:
                     #    print('{}|{}'.format(spkname, phs[2]), end=' ')
+            #else:
+            #    print('len self.vec_sample after trim: ', len(self.vec_sample))
+            #    first_vec_len = len(self.vec_sample[0])
+            #    raw_aco = []
+            #    for vi, vseq in enumerate(self.vec_sample):
+            #        for vsample in vseq:
+            #            raw_aco.append(vsample[1])
+            #np.save('/tmp/{}-aco.npy'.format(self.split), raw_aco)
         print('-' * 50)
         end_t = timeit.default_timer()
         print('TCSTAR_aco-{} > Vectorized dur samples in {:.4f} '

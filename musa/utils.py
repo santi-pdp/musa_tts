@@ -1,10 +1,15 @@
 import torch
 from torch.autograd import Variable
+import torch.optim as optim
+from .ext import YFOptimizer
 import numpy as np
 
 
 def var_to_cuda(var):
-    if isinstance(var, Variable):
+    if var is None:
+        return var
+    # from 0.4.0 tensors are variables too
+    if isinstance(var, Variable) or isinstance(var, torch.Tensor):
         return var.cuda()
     elif isinstance(var, tuple): 
         return tuple(v.cuda() for v in var)
@@ -18,6 +23,8 @@ def var_to_cuda(var):
         raise TypeError('Incorrect var type to cuda')
 
 def repackage_hidden(h, curr_bsz):
+    if h is None:
+        return h
     """ Coming from https://github.com/pytorch/examples/blob/master/word_language_model/main.py """
     """Wraps hidden states in new Variables, to detach them from their history."""
     if type(h) == Variable:
@@ -323,6 +330,19 @@ def apply_pf(cc_pred, pf=1., n_feats=40):
     for n in range(1, n_feats):
         pf_i = pf ** n
         pfs.append(pf_i)
-        print('multiplying order {} by {}'.format(cc_pred[:, n], pf_i))
     cc_pred[:, :n_feats] = cc_pred[:, :n_feats] * pfs
     return cc_pred
+
+def select_optimizer(model, optimizer, lr, patience):
+    sched = None
+    if optimizer != 'YF':
+        opti = getattr(optim, optimizer)(model.parameters(),
+                                         lr=lr)
+        if optimizer == 'SGD':
+            sched = ReduceLROnPlateau(opti, 'min', factor=0.33,
+                                      patience=patience,
+                                      verbose=True)
+    else:
+        opti = YFOptimizer(model.parameters(), lr=lr)
+    return opti, sched
+
