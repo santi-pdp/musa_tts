@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from torch.autograd import Variable
 import torch.nn.functional as F
 import torch.nn as nn
@@ -218,6 +219,7 @@ def attention(query, key, value, mask=None, dropout=None):
              / math.sqrt(d_k)
     if mask is not None:
         scores = scores.masked_fill(mask == 0, -1e9)
+    #print(scores.size())
     p_attn = F.softmax(scores, dim = -1)
     if dropout is not None:
         p_attn = dropout(p_attn)
@@ -269,7 +271,7 @@ class PositionwiseFeedForward(nn.Module):
 
 class PositionalEncoding(nn.Module):
     "Implement the PE function."
-    def __init__(self, d_model, dropout, max_len=5000):
+    def __init__(self, d_model, dropout, max_len=16000):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
         
@@ -283,8 +285,8 @@ class PositionalEncoding(nn.Module):
         pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
         
-    def forward(self, x):
-        x = x + Variable(self.pe[:, :x.size(1)], 
+    def forward(self, x, start_idx=0):
+        x = x + Variable(self.pe[:, start_idx:start_idx+x.size(1)], 
                          requires_grad=False)
         return self.dropout(x)
 
@@ -332,16 +334,17 @@ class AttEncoderLayer(nn.Module):
 class AttDecoderLayer(nn.Module):
     "Decoder is made up of self-attn, src-attn and feed forward (defined below)"
     def __init__(self, size, self_attn, src_attn, feed_forward, dropout):
-        super(AttEncoderLayer, self).__init__()
+        super(AttDecoderLayer, self).__init__()
         self.self_attn = self_attn
-        self.src_attn = serc_attn
+        self.src_attn = src_attn
         self.feed_forward = feed_forward
         self.sublayer = clones(SublayerConnection(size, dropout), 3)
         self.size = size
 
-    def forward(self, x, memory, mask):
-        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, mask))
-        x = self.sublayer[1](x, lambda x: self.self_attn(x, m, m, mask))
+    def forward(self, x, memory, src_mask, trg_mask):
+        m = memory
+        x = self.sublayer[0](x, lambda x: self.self_attn(x, x, x, trg_mask))
+        x = self.sublayer[1](x, lambda x: self.src_attn(x, m, m, src_mask))
         return self.sublayer[2](x, self.feed_forward)
 
 class NoamOpt(object):
@@ -377,3 +380,9 @@ class NoamOpt(object):
 def get_std_opt(model):
     return NoamOpt(model.emb_size, 2, 4000,
             torch.optim.Adam(model.parameters(), lr=0, betas=(0.9, 0.98), eps=1e-9))
+
+def subsequent_mask(size):
+    "Mask out subsequent positions."
+    attn_shape = (1, size, size)
+    subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8')
+    return torch.from_numpy(subsequent_mask) == 0
