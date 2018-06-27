@@ -2,13 +2,24 @@
 
 ### Synthesize
 
+With forced duration read from label file:
 ```
-bash synthesize.sh data/tcstar/lab/72/T6B72110000.lab 73_testing \
-     dur_experiments/ckpt_dur_73_mse_maxseqlen35_bsize15/best-val_e12_dur_model.ckpt MUSA/l1_so-73_aco_fulldata/best-val_e15_aco_model.ckpt
+python synthesize.py --model_cfg aco_73_ckpt/main.opts \
+        --aco_model aco_73_ckpt/best-val_e{epoch}_aco_model.ckpt \
+        --synthesize_lab <lab_path>.lab --force-dur --cfg cfg/tcstar_73.cfg --cuda --pf 1.04
 ```
 
-### Train
+With prediction coming from duration model:
+```
+python synthesize.py --model_cfg aco_73_ckpt/main.opts \
+        --aco_model aco_73_ckpt/best-val_e{epoch}_aco_model.ckpt \
+        --dur_model aco_73_ckpt/best-val_e{epoch}_dur_model.ckpt \
+        --synthesize_lab <lab_path>.lab --cfg cfg/tcstar_73.cfg --cuda --pf 1.04
+```
+
+### Train the acoustic model
 
 ```
-python main.py --train-aco --save_path MUSA/so-73_aco_fulldata_20patience --aco_max_seq_len 35 --batch_size 50 --cuda --cfg cfg/tcstar_73.cfg --patience 20
+python train_aco.py --save_path aco_73_ckpt --cuda --cfg cfg/tcstar_73.cfg --batch_size 32 --epoch 100 --patience 20 --max_seq_len 50 
+python train_dur.py --save_path dur_73_ckpt --cuda --cfg cfg/tcstar_73.cfg --batch_size 32 --epoch 100 --patience 20 --max_seq_len 50 
 ```
