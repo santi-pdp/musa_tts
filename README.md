@@ -1,4 +1,4 @@
-# musa_tts
+# MUSA Text-to-speech
 
 ### Synthesize
 
