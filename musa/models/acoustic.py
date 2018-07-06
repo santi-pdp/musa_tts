@@ -110,24 +110,19 @@ class acoustic_rnn(speaker_model):
                 nout_state[spk] = self.out_layers[spk](x,
                                                        out_state[spk])
                 # Bound classification output within [0, 1] properly
-                y[spk] = self.correct_classification_output(y[spk])
+                #y[spk] = self.correct_classification_output(y[spk])
+                y[spk] = tanh2sigmoid(y[spk])
                 #y[spk] = y[spk].view(dling_features.size(0), -1,
                 #                     self.num_outputs)
         else:
             y, nout_state = self.out_layer(x,
                                            out_state)
             # Bound classification output within [0, 1] properly
-            y = self.correct_classification_output(y)
+            #y = correct_classification_output(y)
+            y = tanh2sigmoid(y)
             #y = y.view(dling_features.size(0), -1, self.num_outputs)
         return y, hid_state, nout_state
 
-    def correct_classification_output(self, x):
-        # split tensor in two, with last index being the one to go [0, 1]
-        lin = x[:, :, :-1]
-        cla = x[:, :, -1:]
-        # suposing it went through TANH
-        cla = (1 + cla) / 2
-        return torch.cat((lin, cla), dim=2)
 
     def init_hidden_state(self, curr_bsz):
         return (torch.zeros(self.rnn_layers, curr_bsz, self.rnn_size),
@@ -161,7 +156,8 @@ class acoustic_satt(speaker_model):
                  bnorm=False,
                  emb_layers=2,
                  h=8, d_model=512,
-                 d_ff=2048, N=6):
+                 d_ff=2048, N=6,
+                 out_activation='Sigmoid'):
         # no other mulspk implemented yet
         assert mulspk_type == 'sinout', mulspk_type
         super().__init__(num_inputs, mulspk_type, 
@@ -170,27 +166,28 @@ class acoustic_satt(speaker_model):
         self.emb_size = emb_size
         self.emb_layers = emb_layers
         self.emb_activation = emb_activation
-        # wrongly named rnn_size, there are no RNN here
-        # but core needs this name for output layer
-        self.rnn_size = emb_size
         self.bnorm = bnorm
         self.num_outputs = 43
         self.dropout = dropout
         self.num_inputs = num_inputs
         # build embedding of spks (if required) 
         self.build_spk_embedding()
+        # wrongly named rnn_size, there are no RNN here
+        # but core needs this name for output layer
+        self.rnn_size = self.emb_size
         # -- Build tanh embedding trunk
         self.build_input_embedding()
         c = copy.deepcopy
-        attn = MultiHeadedAttention(h, emb_size)
-        ff = PositionwiseFeedForward(emb_size, d_ff, dropout)
-        self.position = PositionalEncoding(emb_size, dropout)
-        enc_layer = AttEncoderLayer(emb_size, c(attn), c(ff),
+        attn = MultiHeadedAttention(h, self.emb_size)
+        ff = PositionwiseFeedForward(self.emb_size, d_ff, dropout)
+        self.position = PositionalEncoding(self.emb_size, dropout)
+        enc_layer = AttEncoderLayer(self.emb_size, c(attn), c(ff),
                                     dropout)
         self.model = clones(enc_layer, N)
         self.norm = LayerNorm(enc_layer.size)
         # -- Build output mapping FC(s)
         self.build_output(rnn_output=False)
+        self.out_activation = out_activation
         self.sigmoid = nn.Sigmoid()
         #print('Built enc_layer: ', enc_layer)
         #print('Built norm layer: ', self.norm)
@@ -230,11 +227,12 @@ class acoustic_satt(speaker_model):
         # forward through output FC
         y = self.out_layer(h)
         y = self.sigmoid(y)
+
         y = y.transpose(0, 1)
         return y
 
 class acoustic_decoder_satt(speaker_model):
-
+    # TODO: Check validity of this model in terms of seq2seq behavior
     def __init__(self, num_inputs, emb_size=512, 
                  dropout=0.1,
                  emb_activation='Tanh',
@@ -244,7 +242,8 @@ class acoustic_decoder_satt(speaker_model):
                  bnorm=False,
                  emb_layers=2,
                  h=8, d_model=512,
-                 d_ff=2048, N=6):
+                 d_ff=2048, N=6,
+                 out_activation='Sigmoid'):
         # no other mulspk implemented yet
         assert mulspk_type == 'sinout', mulspk_type
         super().__init__(num_inputs, mulspk_type, 
@@ -277,7 +276,7 @@ class acoustic_decoder_satt(speaker_model):
         self.norm = LayerNorm(enc_layer.size)
         # -- Build output mapping FC(s)
         self.build_output(rnn_output=False)
-        self.sigmoid = nn.Sigmoid()
+        self.sigmoid = getattr(nn, opts.out_activation)()
         #print('Built enc_layer: ', enc_layer)
         #print('Built norm layer: ', self.norm)
         #print('Built model: ', self.model)

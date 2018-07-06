@@ -124,6 +124,7 @@ class speaker_model(nn.Module):
     def forward_input_embedding(self, dling_features, speaker_idx):
         # inputs are time-major (Seqlen, Bsize, features)
         dling_features = dling_features.transpose(0, 1)
+        speaker_idx = speaker_idx.transpose(0, 1)
         #re_dling_features = dling_features.view(-1, dling_features.size(-1))
         #re_dling_features = dling_features.view(-1, dling_features.size(-1))
         if not self.gating:
@@ -161,6 +162,7 @@ class speaker_model(nn.Module):
                                 bidirectional=False,
                                 batch_first=False,
                                 dropout=self.dropout)
+        self.core_dout = nn.Dropout(self.dropout)
         if self.gating:
             self.core_g = nn.Sequential(
                 nn.Linear(self.emb_size, self.rnn_size),
@@ -176,7 +178,7 @@ class speaker_model(nn.Module):
             x_g = x_g.transpose(0, 1)
             assert x_g.size() == h_t.size(), x_g.size()
             h_t = x_g * h_t
-        return h_t, hid_state
+        return self.core_dout(h_t), hid_state
 
     def build_output(self, rnn_output=False):
         if self.mulout:
@@ -271,7 +273,7 @@ class PositionwiseFeedForward(nn.Module):
 
 class PositionalEncoding(nn.Module):
     "Implement the PE function."
-    def __init__(self, d_model, dropout, max_len=16000):
+    def __init__(self, d_model, dropout, max_len=50000):
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
         
@@ -286,8 +288,10 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
         
     def forward(self, x, start_idx=0):
-        x = x + Variable(self.pe[:, start_idx:start_idx+x.size(1)], 
-                         requires_grad=False)
+        #print(x.size())
+        #print('start_idx: ', start_idx)
+        curr_pe = self.pe[:, start_idx:start_idx+x.size(1), :]
+        x = x + curr_pe
         return self.dropout(x)
 
 class SublayerConnection(nn.Module):
@@ -386,3 +390,15 @@ def subsequent_mask(size):
     attn_shape = (1, size, size)
     subsequent_mask = np.triu(np.ones(attn_shape), k=1).astype('uint8')
     return torch.from_numpy(subsequent_mask) == 0
+
+
+def tanh2sigmoid(x):
+    return (1 + x) / 2
+
+def correct_classification_output(x):
+    # split tensor in two, with last index being the one to go [0, 1]
+    lin = x[:, :, :-1]
+    cla = x[:, :, -1:]
+    # suposing it went through TANH
+    cla = (1 + cla) / 2
+    return torch.cat((lin, cla), dim=2)
