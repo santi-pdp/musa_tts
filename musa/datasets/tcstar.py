@@ -239,7 +239,7 @@ def varlen_dur_collate(batch):
     seqlens = torch.from_numpy(seqlens)
     return spks, labs, durs, seqlens, ph_batch
 
-def varlen_aco_collate(batch):
+def old_varlen_aco_collate(batch):
     """ Variable length aco collate function,
         compose the batch of sequences (lab+dur, aco) 
         by padding to the longest one found
@@ -316,10 +316,11 @@ class TCSTAR(Dataset):
         self.trim_to_min = trim_to_min
         self.forced_trim = forced_trim
         if max_seq_len is not None:
-            if batch_size is None:
-                raise ValueError('Please specify a batch size in '
-                                 ' TCSTAR to arrange the stateful '
-                                 ' sequences.')
+            #if batch_size is None:
+            #    raise ValueError('Please specify a batch size in '
+            #                     ' TCSTAR to arrange the stateful '
+            #                     ' sequences.')
+            pass
         else:
             print('WARNING: trim to min flag activated, but has no '
                   ' effect because no max_seq_len specified.')
@@ -812,12 +813,14 @@ class TCSTAR_aco(TCSTAR):
                  forced_trim=None,
                  norm_aco=True,
                  aco_window_stride=80, aco_window_len=320, 
-                 aco_frame_rate=16000):
+                 aco_frame_rate=16000, 
+                 seq2seq_lab=False):
         self.aco_window_stride = aco_window_stride
         self.aco_window_len = aco_window_len
         self.aco_frame_rate = aco_frame_rate
         self.aco_dir = aco_dir
         self.norm_aco = norm_aco
+        self.seq2seq_lab = seq2seq_lab
         super(TCSTAR_aco, self).__init__(spk_cfg_file, split, lab_dir,
                                          lab_codebooks_path, force_gen=force_gen,
                                          ogmios_lab=ogmios_lab,
@@ -831,9 +834,9 @@ class TCSTAR_aco(TCSTAR):
                                          exclude_eval_spks=exclude_eval_spks,
                                          batch_size=batch_size,
                                          max_spk_samples=max_spk_samples)
-        if self.max_seq_len is None:
-            raise ValueError('TCSTAR_aco does not accept untrimmed seqs.'
-                             'Please specify a max_seq_len')
+        #if self.max_seq_len is None:
+        #    raise ValueError('TCSTAR_aco does not accept untrimmed seqs.'
+        #                     'Please specify a max_seq_len')
         if self.q_classes is not None:
             raise NotImplementedError('KMeans output in TCSTAR_aco to be '
                                       'implemented.')
@@ -868,7 +871,6 @@ class TCSTAR_aco(TCSTAR):
                                               compute_dur_stats=False,
                                               compute_dur_classes=False,
                                               aco_dir=self.aco_dir)
-
         # Build label encoder (codebooks will be made if they don't exist or
         # if they are forced)
         lab_enc = label_encoder(codebooks_path=lab_codebooks_path,
@@ -884,11 +886,15 @@ class TCSTAR_aco(TCSTAR):
             # separated by spk idx
             self.vec_sample = {}
             self.phone_sample = {}
+            if self.seq2seq_lab:
+                self.lab_sample = {}
         else:
             # all merged together
             self.vec_sample = []
             # store reference to phone identities (str)
             self.phone_sample = []
+            if self.seq2seq_lab:
+                self.lab_sample = []
         total_aco_seqs = 0
         for aco_ in total_parsed_aco:
             total_aco_seqs += len(aco_[0]) * len(aco_[1])
@@ -898,157 +904,205 @@ class TCSTAR_aco(TCSTAR):
         print('-' * 50)
         print('Encoding aco samples with max_seq_len {} and batch_size '
               '{}'.format(self.max_seq_len, self.batch_size))
-        # First, arrange all sequences into very long ones (per spk)
-        # Then split it into batch_size sequences, and arrange
-        # samples to follow batch_size interleaved samples (stateful)
-        all_code_seq = {}
-        all_phone_seq = {}
-        for spk, dur_seq, lab_seq, aco_seq, \
-            reldur_seq in zip(total_parsed_spks,
-                              total_parsed_durs,
-                              total_parsed_labs,
-                              total_parsed_aco,
-                              total_parsed_reldur):
-            #print('len(spk)=', len(spk))
-            #print('len(dur_seq)=', len(dur_seq))
-            #print('len(lab_seq)=', len(lab_seq))
-            #print('len(aco_seq)=', len(aco_seq))
-            #print('len(reldur_seq)=', len(reldur_seq))
-            for t_, (dur, lab, aco, reldur) in enumerate(zip(dur_seq, 
-                                                             lab_seq, 
-                                                             aco_seq,
-                                                             reldur_seq)):
-                #print('len(aco) = ', len(aco))
-                #print('len(reldur) = ', len(reldur))
-                #code = lab_enc(lab, normalize='minmax', sort_types=False)
-                code = lab_enc(lab, normalize='znorm', sort_types=False)
-                for aco_ph, reldur_ph in zip(aco, reldur):
-                    #print('len(reldur_ph)=', len(reldur_ph))
-                    #print('reldur_ph[0]=', reldur_ph[0])
-                    #print('reldur_ph[1]=', reldur_ph[1])
-                    # process aco outputs and absolute dur
-                    naco, nreldur = self.process_aco(spk, aco_ph, reldur_ph[1])
-                    #print('aco_ph = ', aco_ph)
-                    #print('naco = ', naco)
-                    #print('reldur_ph[1] = ', reldur_ph[1])
-                    #print('nreldur = ', nreldur)
-                    nreldur = [reldur_ph[0], nreldur]
-                    if spk not in all_code_seq:
-                        all_code_seq[spk] = []
-                        all_phone_seq[spk] = []
-                    all_code_seq[spk].append([self.spk2idx[spk]] + code + nreldur + \
-                                              naco.tolist())
-                    all_phone_seq[spk].append(lab[:5])
+        if self.max_seq_len is None or self.batch_size is None:
+            assert not self.mulout
+            for spk, dur_seq, lab_seq, aco_seq, reldur_seq \
+                    in zip(total_parsed_spks, total_parsed_durs, 
+                                             total_parsed_labs,
+                                             total_parsed_aco,
+                                             total_parsed_reldur):
+                vec_seq = []
+                phone_seq = []
+                if self.seq2seq_lab:
+                    lab_seq = []
+                quit_seq = False
+                total_frames = 0
+                for t_, (dur, lab, aco, reldur) in enumerate(zip(dur_seq, 
+                                                                 lab_seq, 
+                                                                 aco_seq,
+                                                                 reldur_seq)):
+                    if quit_seq:
+                        break
+                    code = lab_enc(lab, normalize='znorm', sort_types=False)
                     if not hasattr(self, 'ling_feats_dim'):
                         self.ling_feats_dim = len(code)
                         print('setting ACO ling feats dim: ',
                               self.ling_feats_dim)
-                    if not hasattr(self, 'aco_feats_dim'):
-                        self.aco_feats_dim = len(naco)
-                        print('setting ACO aco feats dim: ', len(naco))
-        all_seq_len = {}
-        if self.trim_to_min:
-            # count each spks samples
-            counts = {}
-            counts_min = np.inf
-            counts_spk = None
-            #samples_cnt, min_cnt, min_spk = count_spk_samples(co_arr, ph_arr)
-            #print('samples_cnt: ', json.dumps(samples_cnt, indent=2))
-            #print('min_cnt: ', min_cnt)
-            #print('min_spk: ', min_spk)
-        for spkname, spkdata in all_code_seq.items():
-            # all_code_seq contains the large sequence of features (in, out)
-            all_seq_len[spkname] = len(spkdata)
-            print('{}: Length of all code_seq: '
-                  '{}'.format(spkname,
-                              all_seq_len[spkname]))
-            # trim data to fit stateful arrangement
-            total_batches = all_seq_len[spkname] // (self.batch_size * \
-                                                     self.max_seq_len)
-            tri_code_seq = spkdata[:self.batch_size * self.max_seq_len * \
-                                    total_batches]
-            all_code_seq[spkname] = tri_code_seq
-            tri_phone_seq = all_phone_seq[spkname][:self.batch_size * \
-                                                   self.max_seq_len * \
-                                                   total_batches]
-            all_phone_seq[spkname] = tri_phone_seq
-            print('total stateful batches: ', total_batches)
+                    for aco_ph, reldur_ph in zip(aco, reldur):
+                        # process aco outputs and absolute dur
+                        naco, nreldur = self.process_aco(spk, aco_ph, reldur_ph[1])
+                        if not hasattr(self, 'aco_feats_dim'):
+                            self.aco_feats_dim = len(naco)
+                            print('setting ACO aco feats dim: ', len(naco))
+                        nreldur = [reldur_ph[0], nreldur]
+                        phone_seq.append(lab[:5])
+                        vec_seq.append([self.spk2idx[spk], code + nreldur, \
+                                        np.array(naco.tolist(),
+                                                 dtype=np.float32)])
+                        total_frames += 1
+                        if self.max_seq_len is not None \
+                           and total_frames >= self.max_seq_len:
+                            quit_seq = True
+                            break
+                    # appending lab to ensure it goes after max_seq_len control
+                    if self.seq2seq_lab:
+                        lab_seq.append([self.spk2idx[spk], code])
 
-            # Create dict of data to statefulize codes and phones data
-            to_st_data = {'co':{'data':all_code_seq[spkname], 
-                                'np_class':np.array},
-                          'ph':{'data':all_phone_seq[spkname],
-                                'np_class':np.char.array}}
-            st_data = statefulize_data(to_st_data, self.batch_size,
-                                       self.max_seq_len)
-            co_arr = st_data['co']['st_data']
-            ph_arr = st_data['ph']['st_data']
+                self.vec_sample.append(vec_seq)
+                self.phone_sample.append(phone_seq)
+                if self.seq2seq_lab:
+                    self.lab_sample.append(lab_seq)
+        else:
+            # First, arrange all sequences into very long ones (per spk)
+            # Then split it into batch_size sequences, and arrange
+            # samples to follow batch_size interleaved samples (stateful)
+            all_code_seq = {}
+            all_phone_seq = {}
+            for spk, dur_seq, lab_seq, aco_seq, \
+                reldur_seq in zip(total_parsed_spks,
+                                  total_parsed_durs,
+                                  total_parsed_labs,
+                                  total_parsed_aco,
+                                  total_parsed_reldur):
+                #print('len(spk)=', len(spk))
+                #print('len(dur_seq)=', len(dur_seq))
+                #print('len(lab_seq)=', len(lab_seq))
+                #print('len(aco_seq)=', len(aco_seq))
+                #print('len(reldur_seq)=', len(reldur_seq))
+                for t_, (dur, lab, aco, reldur) in enumerate(zip(dur_seq, 
+                                                                 lab_seq, 
+                                                                 aco_seq,
+                                                                 reldur_seq)):
+                    #print('len(aco) = ', len(aco))
+                    #print('len(reldur) = ', len(reldur))
+                    #code = lab_enc(lab, normalize='minmax', sort_types=False)
+                    code = lab_enc(lab, normalize='znorm', sort_types=False)
+                    for aco_ph, reldur_ph in zip(aco, reldur):
+                        #print('len(reldur_ph)=', len(reldur_ph))
+                        #print('reldur_ph[0]=', reldur_ph[0])
+                        #print('reldur_ph[1]=', reldur_ph[1])
+                        # process aco outputs and absolute dur
+                        naco, nreldur = self.process_aco(spk, aco_ph, reldur_ph[1])
+                        #print('aco_ph = ', aco_ph)
+                        #print('naco = ', naco)
+                        nreldur = [reldur_ph[0], nreldur]
+                        if spk not in all_code_seq:
+                            all_code_seq[spk] = []
+                            all_phone_seq[spk] = []
+                        all_code_seq[spk].append([self.spk2idx[spk]] + code + nreldur + \
+                                                  naco.tolist())
+                        all_phone_seq[spk].append(lab[:5])
+                        if not hasattr(self, 'ling_feats_dim'):
+                            self.ling_feats_dim = len(code)
+                            print('setting ACO ling feats dim: ',
+                                  self.ling_feats_dim)
+                        if not hasattr(self, 'aco_feats_dim'):
+                            self.aco_feats_dim = len(naco)
+                            print('setting ACO aco feats dim: ', len(naco))
+            all_seq_len = {}
+            if self.trim_to_min:
+                # count each spks samples
+                counts = {}
+                counts_min = np.inf
+                counts_spk = None
+                #samples_cnt, min_cnt, min_spk = count_spk_samples(co_arr, ph_arr)
+                #print('samples_cnt: ', json.dumps(samples_cnt, indent=2))
+                #print('min_cnt: ', min_cnt)
+                #print('min_spk: ', min_spk)
+            for spkname, spkdata in all_code_seq.items():
+                # all_code_seq contains the large sequence of features (in, out)
+                all_seq_len[spkname] = len(spkdata)
+                print('{}: Length of all code_seq: '
+                      '{}'.format(spkname,
+                                  all_seq_len[spkname]))
+                # trim data to fit stateful arrangement
+                total_batches = all_seq_len[spkname] // (self.batch_size * \
+                                                         self.max_seq_len)
+                tri_code_seq = spkdata[:self.batch_size * self.max_seq_len * \
+                                        total_batches]
+                all_code_seq[spkname] = tri_code_seq
+                tri_phone_seq = all_phone_seq[spkname][:self.batch_size * \
+                                                       self.max_seq_len * \
+                                                       total_batches]
+                all_phone_seq[spkname] = tri_phone_seq
+                print('total stateful batches: ', total_batches)
 
-            # re-format data per speaker excluding padding symbols now
-            for phone_sample, vec_sample in zip(ph_arr, co_arr):
-                vec_seq = []
-                ph_seq = []
-                for t_ in range(vec_sample.shape[0]):
-                    vec_seq_el = vec_sample[t_]
-                    ph_seq_el = phone_sample[t_]
-                    aco_i_t = vec_seq_el[-self.aco_feats_dim:]
-                    #if self.q_classes is not None:
-                    #    aco_i_t = np.array(aco_i_t, dtype=np.int64)
-                    vec_seq.append([vec_seq_el[0], vec_seq_el[1:-self.aco_feats_dim], 
-                                    aco_i_t])
-                    ph_seq.append(ph_seq_el.tolist())
-                if self.mulout:
-                    spk_name = self.idx2spk[vec_seq_el[0]] 
-                    if spk_name not in self.vec_sample:
-                        self.vec_sample[spk_name] = []
-                        self.phone_sample[spk_name] = []
-                    self.vec_sample[spk_name].append(vec_seq)
-                    self.phone_sample[spk_name].append(ph_seq)
+                # Create dict of data to statefulize codes and phones data
+                to_st_data = {'co':{'data':all_code_seq[spkname], 
+                                    'np_class':np.array},
+                              'ph':{'data':all_phone_seq[spkname],
+                                    'np_class':np.char.array}}
+                st_data = statefulize_data(to_st_data, self.batch_size,
+                                           self.max_seq_len)
+                co_arr = st_data['co']['st_data']
+                ph_arr = st_data['ph']['st_data']
+
+                # re-format data per speaker excluding padding symbols now
+                for phone_sample, vec_sample in zip(ph_arr, co_arr):
+                    vec_seq = []
+                    ph_seq = []
+                    for t_ in range(vec_sample.shape[0]):
+                        vec_seq_el = vec_sample[t_]
+                        ph_seq_el = phone_sample[t_]
+                        aco_i_t = vec_seq_el[-self.aco_feats_dim:]
+                        #if self.q_classes is not None:
+                        #    aco_i_t = np.array(aco_i_t, dtype=np.int64)
+                        vec_seq.append([vec_seq_el[0], vec_seq_el[1:-self.aco_feats_dim], 
+                                        aco_i_t])
+                        ph_seq.append(ph_seq_el.tolist())
+                    if self.mulout:
+                        spk_name = self.idx2spk[vec_seq_el[0]] 
+                        if spk_name not in self.vec_sample:
+                            self.vec_sample[spk_name] = []
+                            self.phone_sample[spk_name] = []
+                        self.vec_sample[spk_name].append(vec_seq)
+                        self.phone_sample[spk_name].append(ph_seq)
+                    else:
+                        self.vec_sample.append(vec_seq)
+                        self.phone_sample.append(ph_seq)
+                    if self.trim_to_min:
+                        spk_name = self.idx2spk[vec_seq_el[0]]
+                        if spk_name not in counts:
+                            counts[spk_name] = 0
+                        counts[spk_name] += 1
+            if self.trim_to_min or self.forced_trim is not None:
+                if self.forced_trim is not None:
+                    counts_min = self.forced_trim + 1
+                    counts_spk = 'Forced Trim'
                 else:
-                    self.vec_sample.append(vec_seq)
-                    self.phone_sample.append(ph_seq)
-                if self.trim_to_min:
-                    spk_name = self.idx2spk[vec_seq_el[0]]
-                    if spk_name not in counts:
-                        counts[spk_name] = 0
-                    counts[spk_name] += 1
-        if self.trim_to_min or self.forced_trim is not None:
-            if self.forced_trim is not None:
-                counts_min = self.forced_trim + 1
-                counts_spk = 'Forced Trim'
-            else:
-                for spk_name, cnt in counts.items():
-                    if counts[spk_name] < counts_min:
-                        counts_min = counts[spk_name]
-                        counts_spk = spk_name
-            print('-- Trimming speaker samples --')
-            print('counts_min: ', counts_min)
-            print('counts_spk: ', counts_spk)
-            print('len self.vec_sample prior to trim: ', len(self.vec_sample))
-            self.vec_sample, \
-            self.phone_sample = trim_spk_samples(self.vec_sample,
-                                                 self.phone_sample,
-                                                 counts_min,
-                                                 self.mulout)
-            if self.mulout:
-                # go over all speaker ids and trim to max amount of samples
-                for spkname, phsample in self.phone_sample.items():
-                    print('-' * 60)
-                    print('spk {} phsample len: {}'.format(spkname, len(phsample)))
-                    #for phs in phsample:
-                    #    print('{}|{}'.format(spkname, phs[2]), end=' ')
-            #else:
-            #    print('len self.vec_sample after trim: ', len(self.vec_sample))
-            #    first_vec_len = len(self.vec_sample[0])
-            #    raw_aco = []
-            #    for vi, vseq in enumerate(self.vec_sample):
-            #        for vsample in vseq:
-            #            raw_aco.append(vsample[1])
-            #np.save('/tmp/{}-aco.npy'.format(self.split), raw_aco)
+                    for spk_name, cnt in counts.items():
+                        if counts[spk_name] < counts_min:
+                            counts_min = counts[spk_name]
+                            counts_spk = spk_name
+                print('-- Trimming speaker samples --')
+                print('counts_min: ', counts_min)
+                print('counts_spk: ', counts_spk)
+                print('len self.vec_sample prior to trim: ', len(self.vec_sample))
+                self.vec_sample, \
+                self.phone_sample = trim_spk_samples(self.vec_sample,
+                                                     self.phone_sample,
+                                                     counts_min,
+                                                     self.mulout)
+                if self.mulout:
+                    # go over all speaker ids and trim to max amount of samples
+                    for spkname, phsample in self.phone_sample.items():
+                        print('-' * 60)
+                        print('spk {} phsample len: {}'.format(spkname, len(phsample)))
+                        #for phs in phsample:
+                        #    print('{}|{}'.format(spkname, phs[2]), end=' ')
+                #else:
+                #    print('len self.vec_sample after trim: ', len(self.vec_sample))
+                #    first_vec_len = len(self.vec_sample[0])
+                #    raw_aco = []
+                #    for vi, vseq in enumerate(self.vec_sample):
+                #        for vsample in vseq:
+                #            raw_aco.append(vsample[1])
+                #np.save('/tmp/{}-aco.npy'.format(self.split), raw_aco)
         print('-' * 50)
         end_t = timeit.default_timer()
         print('TCSTAR_aco-{} > Vectorized dur samples in {:.4f} '
               's'.format(self.split, end_t - beg_t))
+        print('Total aco samples: ', len(self.vec_sample))
         # All labs + durs are vectorized and stored at this point
         # store labs reference with speaker ID
 
@@ -1095,7 +1149,11 @@ class TCSTAR_aco(TCSTAR):
             else:
                 # return seq of triplets (spk_idx, code+dur, aco) and 
                 # seq of (ph_id_str)
-                return self.vec_sample[index], self.phone_sample[index]
+                if self.seq2seq_lab:
+                    return self.vec_sample[index], self.phone_sample[index], \
+                           self.lab_sample[index]
+                else:
+                    return self.vec_sample[index], self.phone_sample[index]
         except IndexError:
             print('Error accessing {}:{}'.format(spk_key, index))
             raise
@@ -1116,3 +1174,4 @@ class TCSTAR_aco(TCSTAR):
         else:
             lens = dict((k, len(v)) for k, v in self.vec_sample.items())
             return lens
+
