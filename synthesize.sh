@@ -1,23 +1,16 @@
 #!/bin/bash
 
-if [ $# -lt 4 ]; then
-	echo "Error, please specify: 1) lab_file, 2) save_path, 3) dur_weights, 4) aco_weights"
-	exit 1;
-fi
-LAB_FILE="$1"
-SAVE_PATH="$2"
-DUR_MODEL="$3"
-ACO_WEIGHTS="$4"
-# ACO_DATA="$5"
+#path='aco_ckpt_73'
+#path='sattaco_N3_dff1024_embsz256_maxseqlen120_stPOSE_Noam_ckpt_73_pat20'
+#path='rnn450_embsz128_aco_maxseqlen120_ckpt_73_pat20'
+path='rnn1300_embsz512_aco_maxseqlen120_ckpt_73_pat20'
+#lab='T6B72110000.lab'
+#lab='T6B73200230.lab'
+lab='T6B73200187.lab'
+#epoch='11'
+#epoch='18'
+epoch='12'
 
-python main.py --synthesize_lab $LAB_FILE --save_path $SAVE_PATH \
-	--dur_model $DUR_MODEL --aco_weights $ACO_WEIGHTS --pf 1 --force-dur
-	#--aco_emb_size 256 --aco_rnn_layers 2 --aco_rnn_size 512  # --force-dur --aco_lab_norm znorm
-
-LAB_FNAME=${LAB_FILE##*/}
-LAB_BNAME=${LAB_FNAME%.*}
-# Ahodecode wav file
-ahodecoder16_64 "$SAVE_PATH/$LAB_BNAME".lf0 "$SAVE_PATH/$LAB_BNAME".mfcc "$SAVE_PATH/$LAB_BNAME".fv "$SAVE_PATH/$LAB_BNAME".wav 
-#x2x +af "$ACO_DATA/$LAB_BNAME".cc > /tmp/lab.cc
-#ahodecoder16_64 "$SAVE_PATH/$LAB_BNAME".lf0 /tmp/lab.cc "$SAVE_PATH/$LAB_BNAME".fv "$SAVE_PATH/$LAB_BNAME".wav 
-
+python synthesize.py --model_cfg $path/main.opts \
+	--aco_model $path/best-val_e"$epoch"_aco_model.ckpt \
+	--synthesize_lab data/tcstar/lab/73/$lab --force-dur --cfg cfg/tcstar_73.cfg --pf 1.04  --cuda
