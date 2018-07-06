@@ -101,7 +101,7 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
     lab_codes = []
     for l_n, lab in enumerate(parsed_lab, start=1):
         #print('Encoding[{}]={}'.format(l_n, lab))
-        code = lab_enc(lab, normalize='minmax', sort_types=False)
+        code = lab_enc(lab, normalize='znorm', sort_types=False)
         #print('code[{}]:{}'.format(l_n, code))
         lab_codes.append(code)
     lab_codes = np.array(lab_codes, dtype=np.float32)
@@ -142,7 +142,7 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
         # go over all windows within this dur
         reldur_c = 0.
         dur_t = np.asscalar(dur[t, :, :].cpu().data.numpy())
-        while reldur_c < dur_t:
+        while reldur_c <= dur_t:
             n_reldur = float(reldur_c) / dur_t
             # every 5ms, shift. TODO: change hardcode to allow speed variation
             reldur_c += 0.005
@@ -157,7 +157,8 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
     yt, hstate, ostate = aco_model(aco_inputs,
                                    None, None,
                                    spk_id)
-    #print('yt size: ', yt.size())
+    #np.save('synth_aco_inputs.npy', aco_inputs.squeeze(1).cpu().data.numpy())
+    #np.save('synth_aco_outputs.npy', yt.squeeze(1).cpu().data.numpy())
     acostats = spk2acostats[spk_int]
     min_aco = acostats['min']
     max_aco = acostats['max']
@@ -624,7 +625,8 @@ def train_dur_epoch(model, dloader, opt, log_freq, epoch_idx,
     return epoch_losses
 
 def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
-                   stats=None, va_opts={}, log_writer=None):
+                   stats=None, va_opts={}, log_writer=None,
+                   reset_batch_state=False):
     model.eval()
     with torch.no_grad():
         sil_id = 'pau'
@@ -657,6 +659,7 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
             # decompose the batch into the sub-batches
             spk_b, lab_b, aco_b, slen_b, ph_b = batch
             #print('aco_b size: ', aco_b.size())
+            #print('aco_b size: ', aco_b.size())
             #print('ph_b: ', ph_b)
             # build batch of curr_ph to filter out results without sil phones
             # size of curr_ph_b [bsize, seqlen]
@@ -671,6 +674,14 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
             #print('len(curr_ph_b): ', len(curr_ph_b))
             #print('len(curr_ph_b[0]): ', len(curr_ph_b[0]))
             # convert all into variables and transpose (we want time-major)
+            # TODO: write temporally lab_b adn aco_b to compare to synth
+            # batches for aco objective eval mismatch
+            aco_b_npy = aco_b.data.numpy()
+            lab_b_npy = lab_b.data.numpy()
+            #np.save('eval_aco_{}.npy'.format(b_idx),
+            #        aco_b_npy)
+            #np.save('eval_lab_{}.npy'.format(b_idx),
+            #        lab_b_npy)
             spk_b = spk_b.transpose(0,1)
             spk_name = idx2spk[spk_b.cpu().data[0,0].item()]
             lab_b = lab_b.transpose(0,1)
@@ -681,6 +692,8 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
             if spk_name not in spk2hid_states:
                 hid_state = model.init_hidden_state(curr_bsz)
                 out_state = model.init_output_state(curr_bsz)
+                spk2hid_states[spk_name] = hid_state
+                spk2out_states[spk_name] = out_state
                 #print('Initializing states of spk ', spk_name)
             else:
                 #print('Fetching mulout states of spk ', spk_name)
@@ -711,6 +724,10 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
                 # save its states
                 spk2hid_states[spk_name] = hid_state
                 spk2out_states[spk_name] = out_state
+            if reset_batch_state:
+                # reset RNN states after predicting a batch
+                del spk2hid_states[spk_name]
+                del spk2out_states[spk_name]
             #print('y size: ', y.size())
             #print('aco_b size: ', aco_b.size())
             #print('len(curr_ph_b)= ', len(curr_ph_b))
@@ -720,15 +737,22 @@ def eval_aco_epoch(model, dloader, epoch_idx, cuda=False,
                                                 preds, gtruths,
                                                 spks, sil_mask,
                                                 sil_id)
-        #print('After batch preds shape: ', preds.shape)
-        #print('After batch gtruths shape: ', gtruths.shape)
-        #print('After batch sil_mask shape: ', sil_mask.shape)
-        #print('After batch spks shape: ', spks.shape)
+        print('After batch preds shape: ', preds.shape)
+        print('After batch gtruths shape: ', gtruths.shape)
+        print('After batch sil_mask shape: ', sil_mask.shape)
+        print('After batch spks shape: ', spks.shape)
+        print('Sil mask mean: ', sil_mask.mean())
         # denorm with normalization stats
         assert spk2acostats is not None
         preds, gtruths = denorm_aco_preds_gtruth(preds, gtruths,
                                                  spks, spk2acostats)
         aco_mcd = mcd(preds[:,:40], gtruths[:,:40], spks, idx2spk)
+        print('U/V preds min: ', preds[:, -1].min())
+        print('U/V preds max: ', preds[:, -1].max())
+        print('U/V preds mean: ', preds[:, -1].mean())
+        print('U/V gtruth min: ', gtruths[:, -1].min())
+        print('U/V gtruth max: ', gtruths[:, -1].max())
+        print('U/V gtruth mean: ', gtruths[:, -1].mean())
         #print('preds shape: ', preds.shape)
         #print('gtruths shape: ', gtruths.shape)
         aco_afpr = afpr(np.round(preds[:,-1]).reshape(-1, 1),
@@ -1107,7 +1131,8 @@ def train_attaco_epoch(model, dloader, opt, log_freq, epoch_idx,
     return epoch_losses
 
 def eval_attaco_epoch(model, dloader, epoch_idx, cuda=False,
-                      stats=None, va_opts={}, log_writer=None):
+                      stats=None, va_opts={}, log_writer=None,
+                      reset_batch_state=False):
     model.eval()
     with torch.no_grad():
         sil_id = 'pau'
@@ -1169,7 +1194,8 @@ def eval_attaco_epoch(model, dloader, epoch_idx, cuda=False,
                 # forward through att encoder model
                 y = model(lab_b, speaker_idx=spk_b,
                           pe_start_idx=pe_start_idx)
-            pe_start_idx += aco_b.size(0)
+            if not reset_batch_state:
+                pe_start_idx += aco_b.size(0)
             y = y.cpu()
             spk_npy = spk_b.cpu().data.numpy()
             all_comp = np.all(spk_npy == spk_npy[0, 0]), spk_npy
@@ -1282,28 +1308,29 @@ def eval_attaco_epoch(model, dloader, epoch_idx, cuda=False,
                          epoch_idx, log_writer)
         print('=' * 30)
         # WRITE AUDIO TO TBOARD 
-        tfl = tempfile.NamedTemporaryFile()
-        cc = preds[:, :40]
-        fv = preds[:, -3]
-        lf0 = preds[:, -2]
-        write_aco_file('{}.cc'.format(tfl.name), cc)
-        write_aco_file('{}.fv'.format(tfl.name), fv)
-        write_aco_file('{}.lf0'.format(tfl.name), lf0)
-        aco2wav('{}'.format(tfl.name))
-        rate, wav = wavfile.read('{}.wav'.format(tfl.name))
-        # norm in wav
-        wav = np.array(wav, dtype=np.float32) / 32767.
-        # trim to max of 10 seconds
-        wav = wav[:min(wav.shape[0], int(rate * 10))]
-        log_writer.add_audio('eval_synth_audio',
-                             wav,
-                             epoch_idx,
-                             sample_rate=rate)
-        # remove tmp files
-        os.unlink('{}.cc'.format(tfl.name))
-        os.unlink('{}.fv'.format(tfl.name))
-        os.unlink('{}.lf0'.format(tfl.name))
-        os.unlink('{}.wav'.format(tfl.name))
+        if log_writer is not None:
+            tfl = tempfile.NamedTemporaryFile()
+            cc = preds[:, :40]
+            fv = preds[:, -3]
+            lf0 = preds[:, -2]
+            write_aco_file('{}.cc'.format(tfl.name), cc)
+            write_aco_file('{}.fv'.format(tfl.name), fv)
+            write_aco_file('{}.lf0'.format(tfl.name), lf0)
+            aco2wav('{}'.format(tfl.name))
+            rate, wav = wavfile.read('{}.wav'.format(tfl.name))
+            # norm in wav
+            wav = np.array(wav, dtype=np.float32) / 32767.
+            # trim to max of 10 seconds
+            wav = wav[:min(wav.shape[0], int(rate * 10))]
+            log_writer.add_audio('eval_synth_audio',
+                                 wav,
+                                 epoch_idx,
+                                 sample_rate=rate)
+            # remove tmp files
+            os.unlink('{}.cc'.format(tfl.name))
+            os.unlink('{}.fv'.format(tfl.name))
+            os.unlink('{}.lf0'.format(tfl.name))
+            os.unlink('{}.wav'.format(tfl.name))
         # transform nosil_aco_mcd keys
         new_keys_d = {}
         for k in nosil_aco_mcd.keys():
