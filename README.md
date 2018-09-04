@@ -27,3 +27,7 @@ python train_aco.py --save_path aco_73_ckpt --cuda --cfg cfg/tcstar_73.cfg --bat
 ```
 python train_dur.py --save_path dur_73_ckpt --cuda --cfg cfg/tcstar_73.cfg --batch_size 32 --epoch 100 --patience 20 --max_seq_len 50 
 ```
+
+### TODO:
+
+* Include instrunctions on how to use our latest SALAD model in this README.
