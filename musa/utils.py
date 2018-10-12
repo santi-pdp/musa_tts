@@ -27,8 +27,8 @@ def repackage_hidden(h, curr_bsz):
         return h
     """ Coming from https://github.com/pytorch/examples/blob/master/word_language_model/main.py """
     """Wraps hidden states in new Variables, to detach them from their history."""
-    if type(h) == Variable:
-        return Variable(h.data[:, :curr_bsz, :]).contiguous()
+    if isinstance(h, Variable) or isinstance(h, torch.Tensor):
+        return h[:, :curr_bsz, :].detach().contiguous()
     elif isinstance(h, dict):
         # go element by element, repackaging
         for k, el in h.items():

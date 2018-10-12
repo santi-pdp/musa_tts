@@ -186,7 +186,7 @@ if __name__ == '__main__':
     parser.add_argument('--h', type=int, default=8)
     parser.add_argument('--d_ff', type=int, default=2048)
     parser.add_argument('--no_stateful', action='store_true', default=False)
-    parser.add_argument('--no_last_lnorm', action='store_true', default=False)
+    parser.add_argument('--no_lnorm', action='store_true', default=False)
     parser.add_argument('--conv_out', action='store_true', default=False)
 
     opts = parser.parse_args()

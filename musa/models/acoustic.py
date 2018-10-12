@@ -32,7 +32,9 @@ def acoustic_builder(aco_type, opts):
                              d_ff=opts.d_ff,
                              cuda=opts.cuda,
                              N=opts.N,
-                             h=opts.h)
+                             h=opts.h,
+                             lnorm=(not opts.no_lnorm),
+                             conv_out=opts.conv_out)
         train_fn = 'train_attaco_epoch'
         eval_fn = 'eval_attaco_epoch'
     elif aco_type == 'decsatt':
@@ -157,7 +159,9 @@ class acoustic_satt(speaker_model):
                  emb_layers=2,
                  h=8, d_model=512,
                  d_ff=2048, N=6,
-                 out_activation='Sigmoid'):
+                 out_activation='Sigmoid',
+                 lnorm=True,
+                 conv_out=False):
         # no other mulspk implemented yet
         assert mulspk_type == 'sinout', mulspk_type
         super().__init__(num_inputs, mulspk_type, 
@@ -178,15 +182,21 @@ class acoustic_satt(speaker_model):
         # -- Build tanh embedding trunk
         self.build_input_embedding()
         c = copy.deepcopy
-        attn = MultiHeadedAttention(h, self.emb_size)
+        attn = MultiHeadedAttention(h, self.emb_size, dropout=dropout)
         ff = PositionwiseFeedForward(self.emb_size, d_ff, dropout)
         self.position = PositionalEncoding(self.emb_size, dropout)
         enc_layer = AttEncoderLayer(self.emb_size, c(attn), c(ff),
-                                    dropout)
+                                    dropout, lnorm)
         self.model = clones(enc_layer, N)
-        self.norm = LayerNorm(enc_layer.size)
+        if lnorm:
+            self.norm = LayerNorm(enc_layer.size)
         # -- Build output mapping FC(s)
-        self.build_output(rnn_output=False)
+        if conv_out:
+            self.out_layer = nn.Conv1d(emb_size, self.num_outputs, 21,
+                                       padding=10)
+        else:
+            self.build_output(rnn_output=False)
+        self.conv_out = conv_out
         self.out_activation = out_activation
         self.sigmoid = nn.Sigmoid()
         #print('Built enc_layer: ', enc_layer)
@@ -223,11 +233,16 @@ class acoustic_satt(speaker_model):
         for layer in self.model:
             h = layer(h, None)
         #print('h size: ', h.size())
-        h = self.norm(h)
+        if hasattr(self, 'norm'):
+            h = self.norm(h)
         # forward through output FC
-        y = self.out_layer(h)
+        if self.conv_out:
+            h = h.transpose(1, 2)
+            y = self.out_layer(h)
+            y = y.transpose(1, 2)
+        else:
+            y = self.out_layer(h)
         y = self.sigmoid(y)
-
         y = y.transpose(0, 1)
         return y
 

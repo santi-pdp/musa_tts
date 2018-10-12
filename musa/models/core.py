@@ -280,10 +280,10 @@ class PositionalEncoding(nn.Module):
         # Compute the positional encodings once in log space.
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) *
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() *
                              -(math.log(10000.0) / d_model))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
+        pe[:, 0::2] = torch.sin(position.float() * div_term)
+        pe[:, 1::2] = torch.cos(position.float() * div_term)
         pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
         
@@ -299,14 +299,17 @@ class SublayerConnection(nn.Module):
     A residual connection followed by a layer norm.
     Note for code simplicity the norm is first as opposed to last.
     """
-    def __init__(self, size, dropout):
+    def __init__(self, size, dropout, lnorm=True):
         super(SublayerConnection, self).__init__()
-        self.norm = LayerNorm(size)
+        if lnorm:
+            self.norm = LayerNorm(size)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, sublayer):
         "Apply residual connection to any sublayer with the same size."
-        return x + self.dropout(sublayer(self.norm(x)))
+        if hasattr(self, 'norm'):
+            x = self.norm(x)
+        return x + self.dropout(sublayer(x))
 
 class LayerNorm(nn.Module):
     "Construct a layernorm module (See citation for details)."
@@ -323,11 +326,11 @@ class LayerNorm(nn.Module):
 
 class AttEncoderLayer(nn.Module):
     "Encoder is made up of self-attn and feed forward (defined below)"
-    def __init__(self, size, self_attn, feed_forward, dropout):
+    def __init__(self, size, self_attn, feed_forward, dropout, lnorm=True):
         super(AttEncoderLayer, self).__init__()
         self.self_attn = self_attn
         self.feed_forward = feed_forward
-        self.sublayer = clones(SublayerConnection(size, dropout), 2)
+        self.sublayer = clones(SublayerConnection(size, dropout, lnorm), 2)
         self.size = size
 
     def forward(self, x, mask):
