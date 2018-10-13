@@ -177,10 +177,13 @@ def synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
                                'fv len {}'.format(len(uv),
                                                     len(fv))
     # write the output ahocoder files
-    write_aco_file('{}.cc'.format(out_fname), mfcc)
-    write_aco_file('{}.lf0'.format(out_fname), lf0)
-    write_aco_file('{}.fv'.format(out_fname), fv)
-    aco2wav(out_fname)
+    write_aco_file(os.path.join(save_path, 
+                                '{}.cc'.format(out_fname), mfcc))
+    write_aco_file(os.path.join(save_path, 
+                                '{}.lf0'.format(out_fname), lf0))
+    write_aco_file(os.path.join(save_path, 
+                                '{}.fv'.format(out_fname), fv))
+    aco2wav(os.path.join(save_path, out_fname))
     end_t = timeit.default_timer()
     print('[*] Synthesis completed into file: {}.wav .\n'
           'Total elapsed time: {:.4f} s'.format(out_fname,
@@ -278,10 +281,13 @@ def att_synthesize(dur_model, aco_model, spk_id, spk2durstats, spk2acostats,
                                'fv len {}'.format(len(uv),
                                                     len(fv))
     # write the output ahocoder files
-    write_aco_file('{}.cc'.format(out_fname), mfcc)
-    write_aco_file('{}.lf0'.format(out_fname), lf0)
-    write_aco_file('{}.fv'.format(out_fname), fv)
-    aco2wav(out_fname)
+    write_aco_file(os.path.join(save_path, 
+                                '{}.cc'.format(out_fname)), mfcc)
+    write_aco_file(os.path.join(save_path, 
+                                '{}.lf0'.format(out_fname)), lf0)
+    write_aco_file(os.path.join(save_path, 
+                                '{}.fv'.format(out_fname)), fv)
+    aco2wav(os.path.join(save_path, out_fname))
     end_t = timeit.default_timer()
     print('[*] Synthesis completed into file: {}.wav .\n'
           'Total elapsed time: {:.4f} s'.format(out_fname,
